@@ -66,6 +66,9 @@ export interface FileSecurityConfig {
 export interface SecurityConfig extends FileSecurityConfig {
   inboundAuth: InboundAuth;
   token?: string;
+  tokens?: string[];
+  /** Runtime-merged set of all valid tokens (from `token` + `tokens`, deduplicated). */
+  validTokens: Set<string>;
 }
 
 export interface GatewayConfig {

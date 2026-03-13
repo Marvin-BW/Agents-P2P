@@ -177,14 +177,25 @@ function parseConfig(raw: unknown, resolvePath?: (nextPath: string) => string): 
       cleanupIntervalMinutes: Math.max(1, asNumber(storage.cleanupIntervalMinutes, 60)),
     },
     peers: parsePeers(config.peers),
-    security: {
-      inboundAuth: inboundAuth === "bearer" ? "bearer" : "none",
-      token: asString(security.token, ""),
-      allowedMimeTypes,
-      maxFileSizeBytes: asNumber(security.maxFileSizeBytes, 52_428_800),
-      maxInlineFileSizeBytes: asNumber(security.maxInlineFileSizeBytes, 10_485_760),
-      fileUriAllowlist,
-    },
+    security: (() => {
+      const singleToken = asString(security.token, "");
+      const tokenArray = Array.isArray(security.tokens)
+        ? (security.tokens as unknown[]).filter((t): t is string => typeof t === "string" && t.length > 0)
+        : [];
+      const validTokens = new Set<string>(
+        [singleToken, ...tokenArray].filter(t => t.length > 0),
+      );
+      return {
+        inboundAuth: inboundAuth === "bearer" ? "bearer" : "none" as const,
+        token: singleToken,
+        tokens: tokenArray,
+        validTokens,
+        allowedMimeTypes,
+        maxFileSizeBytes: asNumber(security.maxFileSizeBytes, 52_428_800),
+        maxInlineFileSizeBytes: asNumber(security.maxInlineFileSizeBytes, 10_485_760),
+        fileUriAllowlist,
+      };
+    })(),
     routing: {
       defaultAgentId: asString(routing.defaultAgentId, "default"),
     },
@@ -280,11 +291,11 @@ const plugin = {
     // SDK expects userBuilder(req) -> Promise<User>
     // When bearer auth is configured, validate the Authorization header.
     const userBuilder = async (req: { headers?: Record<string, string | string[] | undefined> }) => {
-      if (config.security.inboundAuth === "bearer" && config.security.token) {
+      if (config.security.inboundAuth === "bearer" && config.security.validTokens.size > 0) {
         const authHeader = req.headers?.authorization;
         const header = Array.isArray(authHeader) ? authHeader[0] : authHeader;
-        const expected = `Bearer ${config.security.token}`;
-        if (!header || header !== expected) {
+        const providedToken = typeof header === "string" && header.startsWith("Bearer ") ? header.slice(7) : "";
+        if (!providedToken || !config.security.validTokens.has(providedToken)) {
           telemetry.recordSecurityRejection("http", "invalid or missing bearer token");
           throw jsonRpcError(null, -32000, "Unauthorized: invalid or missing bearer token");
         }
@@ -550,12 +561,12 @@ const plugin = {
           const grpcUserBuilder = async (
             call: { metadata?: { get: (key: string) => unknown[] } } | unknown,
           ) => {
-            if (config.security.inboundAuth === "bearer" && config.security.token) {
+            if (config.security.inboundAuth === "bearer" && config.security.validTokens.size > 0) {
               const meta = (call as any)?.metadata;
               const values = meta?.get?.("authorization") || meta?.get?.("Authorization") || [];
               const header = Array.isArray(values) && values.length > 0 ? String(values[0]) : "";
-              const expected = `Bearer ${config.security.token}`;
-              if (!header || header !== expected) {
+              const providedToken = header.startsWith("Bearer ") ? header.slice(7) : "";
+              if (!providedToken || !config.security.validTokens.has(providedToken)) {
                 telemetry.recordSecurityRejection("grpc", "invalid or missing bearer token");
                 const err: any = new Error("Unauthorized: invalid or missing bearer token");
                 err.code = GrpcStatus.UNAUTHENTICATED;
