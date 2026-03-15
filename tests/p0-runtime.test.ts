@@ -11,6 +11,8 @@ import { QueueingAgentExecutor } from "../src/queueing-executor.js";
 import { FileTaskStore } from "../src/task-store.js";
 import { GatewayTelemetry } from "../src/telemetry.js";
 
+import { silentLogger } from "./helpers.js";
+
 function createDeferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((nextResolve) => {
@@ -102,14 +104,7 @@ describe("P0 runtime components", () => {
   });
 
   it("QueueingAgentExecutor queues overflow safely and tracks metrics", async () => {
-    const telemetry = new GatewayTelemetry(
-      {
-        info() {},
-        warn() {},
-        error() {},
-      } as any,
-      { structuredLogs: false },
-    );
+    const telemetry = new GatewayTelemetry(silentLogger(), { structuredLogs: false });
 
     const gates = new Map<string, ReturnType<typeof createDeferred>>();
     gates.set("task-1", createDeferred());

@@ -9,96 +9,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { v4 as uuidv4 } from "uuid";
 
-import plugin from "../index.js";
-import type { GatewayConfig } from "../src/types.js";
-
-interface Service {
-  id: string;
-  start: (...args: any[]) => Promise<void> | void;
-  stop: (...args: any[]) => Promise<void> | void;
-}
-
-/**
- * Mock WebSocket that returns a response with mediaUrl.
- */
-function createMediaMockWebSocketClass() {
-  return class MockGatewaySocket {
-    readyState = 0;
-    private readonly listeners = new Map<string, Set<(event: any) => void>>();
-
-    constructor(_url: string) {
-      this.listeners.set("open", new Set());
-      this.listeners.set("message", new Set());
-      this.listeners.set("error", new Set());
-      this.listeners.set("close", new Set());
-      queueMicrotask(() => {
-        this.readyState = 1;
-        this.emit("open", {});
-        queueMicrotask(() => {
-          this.emit("message", {
-            data: JSON.stringify({
-              type: "event",
-              event: "connect.challenge",
-              payload: { nonce: "test-nonce" },
-            }),
-          });
-        });
-      });
-    }
-
-    send(data: string): void {
-      const frame = JSON.parse(data) as { id: string; method: string; params?: any };
-      if (frame.method === "connect") {
-        this.respond(frame.id, true, { status: "ok" });
-        return;
-      }
-      if (frame.method === "agent") {
-        // Simulate accepted + final response with media
-        this.respond(frame.id, true, { status: "accepted" });
-        this.respond(frame.id, true, {
-          status: "ok",
-          result: {
-            payloads: [
-              {
-                text: "Here is the generated image",
-                mediaUrl: "https://cdn.example.com/generated-chart.png",
-                mediaUrls: ["https://cdn.example.com/generated-chart.png"],
-              },
-            ],
-          },
-        });
-        return;
-      }
-      this.respond(frame.id, false, null, { message: `unsupported: ${frame.method}` });
-    }
-
-    close(): void {
-      this.readyState = 3;
-      this.emit("close", {});
-    }
-
-    addEventListener(type: string, listener: (event: any) => void): void {
-      if (!this.listeners.has(type)) this.listeners.set(type, new Set());
-      this.listeners.get(type)?.add(listener);
-    }
-
-    removeEventListener(type: string, listener: (event: any) => void): void {
-      this.listeners.get(type)?.delete(listener);
-    }
-
-    private respond(id: string, ok: boolean, payload?: unknown, error?: unknown): void {
-      queueMicrotask(() => {
-        this.emit("message", {
-          data: JSON.stringify({ type: "res", id, ok, payload, error }),
-        });
-      });
-    }
-
-    private emit(type: string, event: unknown): void {
-      for (const listener of this.listeners.get(type) || []) listener(event);
-    }
-  };
-}
+import {
+  createMockWebSocketClass,
+  registerPlugin,
+} from "./helpers.js";
 
 function makeIntegrationConfig(port: number) {
   return {
@@ -120,33 +34,20 @@ function makeIntegrationConfig(port: number) {
 describe("integration: FilePart end-to-end", () => {
   it("sends message with FilePart via JSON-RPC and receives FilePart in response", async () => {
     const port = 18850 + Math.floor(Math.random() * 100);
-    let service: Service | null = null;
 
     const originalWebSocket = (globalThis as any).WebSocket;
-    (globalThis as any).WebSocket = createMediaMockWebSocketClass();
+    (globalThis as any).WebSocket = createMockWebSocketClass({
+      agentResponsePayloads: [
+        {
+          text: "Here is the generated image",
+          mediaUrl: "https://cdn.example.com/generated-chart.png",
+          mediaUrls: ["https://cdn.example.com/generated-chart.png"],
+        },
+      ],
+    });
 
     try {
-      // Register plugin and capture the service
-      plugin.register({
-        pluginConfig: makeIntegrationConfig(port),
-        config: { gateway: { port: 18789 } } as any,
-        runtime: {} as any,
-        logger: { info: () => {}, warn: () => {}, error: () => {} },
-        on: () => {},
-        registerGatewayMethod: () => {},
-        registerService(svc: any) { service = svc; },
-        registerTool: () => {},
-        registerHook: () => {},
-        registerHttpRoute: () => {},
-        registerChannel: () => {},
-        registerCli: () => {},
-        registerProvider: () => {},
-        registerCommand: () => {},
-        resolvePath: (p: string) => p,
-        id: "a2a-gateway",
-        name: "A2A Gateway",
-        source: "test",
-      } as any);
+      const { service } = registerPlugin(makeIntegrationConfig(port));
 
       assert.ok(service, "service must be registered");
       await service!.start({} as any);
@@ -228,32 +129,20 @@ describe("integration: FilePart end-to-end", () => {
 
   it("rejects inbound FilePart with file:// URI (SSRF)", async () => {
     const port = 18850 + Math.floor(Math.random() * 100);
-    let service: Service | null = null;
 
     const originalWebSocket = (globalThis as any).WebSocket;
-    (globalThis as any).WebSocket = createMediaMockWebSocketClass();
+    (globalThis as any).WebSocket = createMockWebSocketClass({
+      agentResponsePayloads: [
+        {
+          text: "Here is the generated image",
+          mediaUrl: "https://cdn.example.com/generated-chart.png",
+          mediaUrls: ["https://cdn.example.com/generated-chart.png"],
+        },
+      ],
+    });
 
     try {
-      plugin.register({
-        pluginConfig: makeIntegrationConfig(port),
-        config: { gateway: { port: 18789 } } as any,
-        runtime: {} as any,
-        logger: { info: () => {}, warn: () => {}, error: () => {} },
-        on: () => {},
-        registerGatewayMethod: () => {},
-        registerService(svc: any) { service = svc; },
-        registerTool: () => {},
-        registerHook: () => {},
-        registerHttpRoute: () => {},
-        registerChannel: () => {},
-        registerCli: () => {},
-        registerProvider: () => {},
-        registerCommand: () => {},
-        resolvePath: (p: string) => p,
-        id: "a2a-gateway",
-        name: "A2A Gateway",
-        source: "test",
-      } as any);
+      const { service } = registerPlugin(makeIntegrationConfig(port));
 
       assert.ok(service, "service must be registered");
       await service!.start({} as any);
@@ -300,32 +189,20 @@ describe("integration: FilePart end-to-end", () => {
 
   it("rejects inbound FilePart with disallowed MIME type", async () => {
     const port = 18850 + Math.floor(Math.random() * 100);
-    let service: Service | null = null;
 
     const originalWebSocket = (globalThis as any).WebSocket;
-    (globalThis as any).WebSocket = createMediaMockWebSocketClass();
+    (globalThis as any).WebSocket = createMockWebSocketClass({
+      agentResponsePayloads: [
+        {
+          text: "Here is the generated image",
+          mediaUrl: "https://cdn.example.com/generated-chart.png",
+          mediaUrls: ["https://cdn.example.com/generated-chart.png"],
+        },
+      ],
+    });
 
     try {
-      plugin.register({
-        pluginConfig: makeIntegrationConfig(port),
-        config: { gateway: { port: 18789 } } as any,
-        runtime: {} as any,
-        logger: { info: () => {}, warn: () => {}, error: () => {} },
-        on: () => {},
-        registerGatewayMethod: () => {},
-        registerService(svc: any) { service = svc; },
-        registerTool: () => {},
-        registerHook: () => {},
-        registerHttpRoute: () => {},
-        registerChannel: () => {},
-        registerCli: () => {},
-        registerProvider: () => {},
-        registerCommand: () => {},
-        resolvePath: (p: string) => p,
-        id: "a2a-gateway",
-        name: "A2A Gateway",
-        source: "test",
-      } as any);
+      const { service } = registerPlugin(makeIntegrationConfig(port));
 
       assert.ok(service, "service must be registered");
       await service!.start({} as any);
@@ -375,36 +252,24 @@ describe("integration: FilePart end-to-end", () => {
 
   it("rejects inbound inline FilePart exceeding size limit", async () => {
     const port = 18850 + Math.floor(Math.random() * 100);
-    let service: Service | null = null;
 
     const originalWebSocket = (globalThis as any).WebSocket;
-    (globalThis as any).WebSocket = createMediaMockWebSocketClass();
+    (globalThis as any).WebSocket = createMockWebSocketClass({
+      agentResponsePayloads: [
+        {
+          text: "Here is the generated image",
+          mediaUrl: "https://cdn.example.com/generated-chart.png",
+          mediaUrls: ["https://cdn.example.com/generated-chart.png"],
+        },
+      ],
+    });
 
     // Override config with very small inline limit for testing
     const testConfig = makeIntegrationConfig(port);
     (testConfig.security as any).maxInlineFileSizeBytes = 100;  // flat field read by parseConfig
 
     try {
-      plugin.register({
-        pluginConfig: testConfig,
-        config: { gateway: { port: 18789 } } as any,
-        runtime: {} as any,
-        logger: { info: () => {}, warn: () => {}, error: () => {} },
-        on: () => {},
-        registerGatewayMethod: () => {},
-        registerService(svc: any) { service = svc; },
-        registerTool: () => {},
-        registerHook: () => {},
-        registerHttpRoute: () => {},
-        registerChannel: () => {},
-        registerCli: () => {},
-        registerProvider: () => {},
-        registerCommand: () => {},
-        resolvePath: (p: string) => p,
-        id: "a2a-gateway",
-        name: "A2A Gateway",
-        source: "test",
-      } as any);
+      const { service } = registerPlugin(testConfig);
 
       assert.ok(service, "service must be registered");
       await service!.start({} as any);

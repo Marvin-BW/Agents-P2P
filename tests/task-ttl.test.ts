@@ -10,13 +10,7 @@ import { runTaskCleanup } from "../src/task-cleanup.js";
 import { FileTaskStore } from "../src/task-store.js";
 import { GatewayTelemetry } from "../src/telemetry.js";
 
-function silentLogger() {
-  return {
-    info() {},
-    warn() {},
-    error() {},
-  } as any;
-}
+import { silentLogger } from "./helpers.js";
 
 function makeTelemetry() {
   return new GatewayTelemetry(silentLogger(), { structuredLogs: false });

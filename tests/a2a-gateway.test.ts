@@ -6,214 +6,15 @@ import { buildAgentCard } from "../src/agent-card.js";
 import { OpenClawAgentExecutor } from "../src/executor.js";
 import type { GatewayConfig } from "../src/types.js";
 
-interface Service {
-  id: string;
-  start: (...args: any[]) => Promise<void> | void;
-  stop: (...args: any[]) => Promise<void> | void;
-}
-
-interface GatewayMethodResult {
-  ok: boolean;
-  data: unknown;
-}
-
-interface Harness {
-  methods: Map<string, (args: any) => void>;
-  service: Service;
-}
-
-function createHarness(config: Record<string, unknown>): Harness {
-  let service: Service | null = null;
-  const methods = new Map<string, (args: any) => void>();
-
-  plugin.register({
-    // Minimal mock; cast to any because the official OpenClawPluginApi has many fields.
-    pluginConfig: config,
-    config: {} as any,
-    runtime: {} as any,
-    logger: {
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-    },
-    on: () => {},
-    registerGatewayMethod(name: string, handler: any) {
-      methods.set(name, handler);
-    },
-    registerService(nextService: any) {
-      service = nextService as Service;
-    },
-    registerTool: () => {},
-    registerHook: () => {},
-    registerHttpRoute: () => {},
-    registerChannel: () => {},
-    registerCli: () => {},
-    registerProvider: () => {},
-    registerCommand: () => {},
-    resolvePath: (p: string) => p,
-    id: "a2a-gateway",
-    name: "A2A Gateway",
-    source: "test",
-  } as any);
-
-  assert(service, "service should be registered");
-
-  return {
-    methods,
-    service,
-  };
-}
-
-function makeConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    agentCard: {
-      name: "Test Agent",
-      description: "test card",
-      url: "http://127.0.0.1:18800/a2a/jsonrpc",
-      skills: [{ name: "chat" }],
-    },
-    server: {
-      host: "127.0.0.1",
-      port: 18800,
-    },
-    peers: [],
-    security: {
-      inboundAuth: "none",
-      allowedMimeTypes: ["image/*", "application/pdf", "text/plain", "text/csv", "application/json", "audio/*", "video/*"],
-      maxFileSizeBytes: 52_428_800,
-      maxInlineFileSizeBytes: 10_485_760,
-      fileUriAllowlist: [],
-    },
-    routing: {
-      defaultAgentId: "default-agent",
-    },
-    ...overrides,
-  };
-}
-
-/**
- * Create a mock WebSocket class that simulates the OpenClaw gateway protocol.
- * Includes connect.challenge event (required since executor uses challenge-based connect).
- * Optional onAgent callback to inspect agent RPC params.
- */
-function createMockWebSocketClass(options?: {
-  onAgent?: (params: Record<string, unknown>) => void;
-  agentResponseText?: string;
-  agentResponsePayloads?: Array<Record<string, unknown>>;
-}) {
-  const agentResponseText = options?.agentResponseText ?? "Gateway response";
-  const agentResponsePayloads = options?.agentResponsePayloads;
-
-  return class MockGatewaySocket {
-    readyState = 0;
-    private readonly listeners = new Map<string, Set<(event: any) => void>>();
-
-    constructor(_url: string) {
-      this.listeners.set("open", new Set());
-      this.listeners.set("message", new Set());
-      this.listeners.set("error", new Set());
-      this.listeners.set("close", new Set());
-      queueMicrotask(() => {
-        this.readyState = 1;
-        this.emit("open", {});
-        // OpenClaw gateway sends connect.challenge after socket opens
-        queueMicrotask(() => {
-          this.emit("message", {
-            data: JSON.stringify({
-              type: "event",
-              event: "connect.challenge",
-              payload: { nonce: "test-nonce-123" },
-            }),
-          });
-        });
-      });
-    }
-
-    send(data: string): void {
-      const frame = JSON.parse(data) as { id: string; method: string; params?: any };
-      if (frame.method === "connect") {
-        this.respond(frame.id, true, { status: "ok" });
-        return;
-      }
-      if (frame.method === "sessions.resolve") {
-        this.respond(frame.id, true, { key: "session-1" });
-        return;
-      }
-      if (frame.method === "agent") {
-        options?.onAgent?.(frame.params || {});
-        this.respond(frame.id, true, { status: "accepted" });
-        const payloads = agentResponsePayloads ?? [{ kind: "text", text: agentResponseText }];
-        this.respond(frame.id, true, {
-          status: "ok",
-          result: { payloads },
-        });
-        return;
-      }
-      this.respond(frame.id, false, null, { message: `unsupported method ${frame.method}` });
-    }
-
-    close(): void {
-      this.readyState = 3;
-      this.emit("close", {});
-    }
-
-    addEventListener(type: string, listener: (event: any) => void): void {
-      if (!this.listeners.has(type)) {
-        this.listeners.set(type, new Set());
-      }
-      this.listeners.get(type)?.add(listener);
-    }
-
-    removeEventListener(type: string, listener: (event: any) => void): void {
-      this.listeners.get(type)?.delete(listener);
-    }
-
-    private respond(id: string, ok: boolean, payload?: unknown, error?: unknown): void {
-      queueMicrotask(() => {
-        this.emit("message", {
-          data: JSON.stringify({
-            type: "res",
-            id,
-            ok,
-            payload,
-            error,
-          }),
-        });
-      });
-    }
-
-    private emit(type: string, event: unknown): void {
-      for (const listener of this.listeners.get(type) || []) {
-        listener(event);
-      }
-    }
-  };
-}
-
-async function invokeGatewayMethod(
-  harness: Harness,
-  methodName: string,
-  params: Record<string, unknown>
-): Promise<GatewayMethodResult> {
-  const method = harness.methods.get(methodName);
-  assert(method, `missing gateway method ${methodName}`);
-
-  return await new Promise<GatewayMethodResult>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`timeout waiting for ${methodName}`)), 3000);
-
-    method({
-      req: { method: "req", params, id: "1" },
-      params,
-      client: null,
-      isWebchatConnect: () => false,
-      context: {} as any,
-      respond: (ok: boolean, data: unknown) => {
-        clearTimeout(timeout);
-        resolve({ ok, data });
-      },
-    });
-  });
-}
+import {
+  createApi,
+  createHarness,
+  createMockWebSocketClass,
+  invokeGatewayMethod,
+  makeConfig,
+  registerPlugin,
+  silentLogger,
+} from "./helpers.js";
 
 describe("zero-config install (issue #7)", () => {
   it("registers plugin with empty config (no agentCard provided)", () => {
@@ -239,14 +40,7 @@ describe("zero-config install (issue #7)", () => {
 
 describe("session key format (PR #9, issue #8)", () => {
   it("session key uses agent: prefix for OpenClaw gateway compatibility", async () => {
-    const api = {
-      config: { gateway: { port: 18789 } },
-      logger: {
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-      },
-    } as any;
+    const api = createApi();
 
     let capturedSessionKey = "";
 
@@ -325,14 +119,7 @@ describe("a2a-gateway plugin", () => {
   });
 
   it("dispatches inbound messages via gateway RPC", async () => {
-    const api = {
-      config: { gateway: { port: 18789 } },
-      logger: {
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-      },
-    } as any;
+    const api = createApi();
 
     const MockWS = createMockWebSocketClass();
 
@@ -380,14 +167,7 @@ describe("a2a-gateway plugin", () => {
   });
 
   it("publishes fallback response when gateway RPC is unavailable", async () => {
-    const api = {
-      config: { gateway: { port: 18789 } },
-      logger: {
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-      },
-    } as any;
+    const api = createApi();
 
     const originalWebSocket = (globalThis as any).WebSocket;
     (globalThis as any).WebSocket = undefined;
@@ -431,14 +211,7 @@ describe("a2a-gateway plugin", () => {
   });
 
   it("cancelTask uses tracked task contextId and does not fabricate it", async () => {
-    const api = {
-      config: { gateway: { port: 18789 } },
-      logger: {
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-      },
-    } as any;
+    const api = createApi();
 
     const executor = new OpenClawAgentExecutor(api, makeConfig() as unknown as GatewayConfig);
     (executor as any).taskContextByTaskId.set("task-1", "ctx-1");
@@ -462,10 +235,7 @@ describe("a2a-gateway plugin", () => {
   });
 
   it("inbound FilePart (URI) is formatted as text for the agent", async () => {
-    const api = {
-      config: { gateway: { port: 18789 } },
-      logger: { info: () => {}, warn: () => {}, error: () => {} },
-    } as any;
+    const api = createApi();
 
     let capturedMessage = "";
 
@@ -526,10 +296,7 @@ describe("a2a-gateway plugin", () => {
   });
 
   it("inbound FilePart sanitizes filename with control chars", async () => {
-    const api = {
-      config: { gateway: { port: 18789 } },
-      logger: { info: () => {}, warn: () => {}, error: () => {} },
-    } as any;
+    const api = createApi();
 
     let capturedMessage = "";
 
@@ -586,10 +353,7 @@ describe("a2a-gateway plugin", () => {
   });
 
   it("inbound FilePart (base64) is formatted with size hint", async () => {
-    const api = {
-      config: { gateway: { port: 18789 } },
-      logger: { info: () => {}, warn: () => {}, error: () => {} },
-    } as any;
+    const api = createApi();
 
     let capturedMessage = "";
 
@@ -648,10 +412,7 @@ describe("a2a-gateway plugin", () => {
   });
 
   it("inbound DataPart is formatted as structured text for the agent", async () => {
-    const api = {
-      config: { gateway: { port: 18789 } },
-      logger: { info: () => {}, warn: () => {}, error: () => {} },
-    } as any;
+    const api = createApi();
 
     let capturedMessage = "";
 
@@ -708,10 +469,7 @@ describe("a2a-gateway plugin", () => {
   });
 
   it("inbound DataPart with primitive data value is formatted correctly", async () => {
-    const api = {
-      config: { gateway: { port: 18789 } },
-      logger: { info: () => {}, warn: () => {}, error: () => {} },
-    } as any;
+    const api = createApi();
 
     let capturedMessage = "";
 
@@ -759,10 +517,7 @@ describe("a2a-gateway plugin", () => {
   });
 
   it("response with mediaUrl produces FilePart in completed task", async () => {
-    const api = {
-      config: { gateway: { port: 18789 } },
-      logger: { info: () => {}, warn: () => {}, error: () => {} },
-    } as any;
+    const api = createApi();
 
     const MockWS = createMockWebSocketClass({
       agentResponsePayloads: [
@@ -826,10 +581,7 @@ describe("a2a-gateway plugin", () => {
   });
 
   it("response with multiple mediaUrls produces multiple FileParts", async () => {
-    const api = {
-      config: { gateway: { port: 18789 } },
-      logger: { info: () => {}, warn: () => {}, error: () => {} },
-    } as any;
+    const api = createApi();
 
     const MockWS = createMockWebSocketClass({
       agentResponsePayloads: [
@@ -878,10 +630,7 @@ describe("a2a-gateway plugin", () => {
   });
 
   it("text-only response produces no FilePart (backward compatible)", async () => {
-    const api = {
-      config: { gateway: { port: 18789 } },
-      logger: { info: () => {}, warn: () => {}, error: () => {} },
-    } as any;
+    const api = createApi();
 
     const MockWS = createMockWebSocketClass({
       agentResponseText: "Just text, no media",
@@ -1046,7 +795,6 @@ describe("a2a-gateway plugin", () => {
 
     try {
       // Capture registered tools so we can invoke a2a_send_file directly
-      const tools = new Map<string, any>();
       const config = makeConfig({
         peers: [
           {
@@ -1056,26 +804,7 @@ describe("a2a-gateway plugin", () => {
         ],
       });
 
-      plugin.register({
-        pluginConfig: config,
-        config: {} as any,
-        runtime: {} as any,
-        logger: { info: () => {}, warn: () => {}, error: () => {} },
-        on: () => {},
-        registerGatewayMethod: () => {},
-        registerService: () => {},
-        registerTool(tool: any) { tools.set(tool.name, tool); },
-        registerHook: () => {},
-        registerHttpRoute: () => {},
-        registerChannel: () => {},
-        registerCli: () => {},
-        registerProvider: () => {},
-        registerCommand: () => {},
-        resolvePath: (p: string) => p,
-        id: "a2a-gateway",
-        name: "A2A Gateway",
-        source: "test",
-      } as any);
+      const { tools } = registerPlugin(config);
 
       const sendFileTool = tools.get("a2a_send_file");
       assert.ok(sendFileTool, "a2a_send_file tool should be registered");
