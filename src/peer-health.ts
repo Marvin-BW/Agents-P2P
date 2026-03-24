@@ -19,6 +19,7 @@ type HealthProbe = (peer: PeerConfig) => Promise<boolean>;
  */
 export class PeerHealthManager {
   private readonly states = new Map<string, PeerState>();
+  private readonly peerSkills = new Map<string, string[]>();
   private readonly peers: PeerConfig[];
   private readonly healthConfig: HealthCheckConfig;
   private readonly cbConfig: CircuitBreakerConfig;
@@ -163,6 +164,22 @@ export class PeerHealthManager {
   /** Get states for all peers. */
   getAllStates(): Map<string, PeerState> {
     return new Map(this.states);
+  }
+
+  /**
+   * Cache skills advertised by a peer's Agent Card.
+   * Called from the health check probe after a successful Agent Card fetch.
+   */
+  updateSkills(peerName: string, skills: string[]): void {
+    this.peerSkills.set(peerName, skills);
+  }
+
+  /**
+   * Return cached skills for all peers.
+   * Used by rule-based routing to match `skills` criteria.
+   */
+  getPeerSkills(): Map<string, string[]> {
+    return new Map(this.peerSkills);
   }
 
   /** Run health checks for all peers. */

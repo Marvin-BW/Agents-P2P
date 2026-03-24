@@ -576,10 +576,10 @@ The agent will follow the skill's procedure automatically.
 - ✅ **P8** Push notifications for long-running tasks — webhook delivery on terminal states (PR #38)
 - ✅ Rule-based routing: auto-select peer + agentId based on message pattern/tags/skills (PR #39)
 - ✅ DNS-SD dynamic agent discovery via SRV + TXT records (PR #40)
+- ✅ `peerSkills` map wired from Agent Card health-check cache into routing rules (skills matching now works)
 
 ### Next
 
-- Wire `peerSkills` map from Agent Card health-check cache into routing rules (skills matching)
 - mDNS self-advertisement (make this gateway discoverable by other gateways)
 - SDK-native push notification integration (currently custom implementation with `pushNotifications: false`)
 

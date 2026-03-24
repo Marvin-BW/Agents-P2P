@@ -158,4 +158,32 @@ describe("PeerHealthManager", () => {
     mgr.stop();
     // No assertion needed — just verify it doesn't throw
   });
+
+  it("updateSkills caches skills for a peer", () => {
+    const mgr = createManager();
+    mgr.updateSkills("bot-a", ["translation", "summarization"]);
+    const skills = mgr.getPeerSkills();
+    assert.deepEqual(skills.get("bot-a"), ["translation", "summarization"]);
+    assert.equal(skills.has("bot-b"), false);
+  });
+
+  it("updateSkills overwrites previous skills", () => {
+    const mgr = createManager();
+    mgr.updateSkills("bot-a", ["old-skill"]);
+    mgr.updateSkills("bot-a", ["new-skill"]);
+    assert.deepEqual(mgr.getPeerSkills().get("bot-a"), ["new-skill"]);
+  });
+
+  it("getPeerSkills returns independent copy", () => {
+    const mgr = createManager();
+    mgr.updateSkills("bot-a", ["skill-1"]);
+    const copy = mgr.getPeerSkills();
+    copy.set("bot-a", ["tampered"]);
+    assert.deepEqual(mgr.getPeerSkills().get("bot-a"), ["skill-1"]);
+  });
+
+  it("getPeerSkills returns empty map when no skills cached", () => {
+    const mgr = createManager();
+    assert.equal(mgr.getPeerSkills().size, 0);
+  });
 });

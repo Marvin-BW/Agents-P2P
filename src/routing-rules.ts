@@ -113,10 +113,9 @@ export function parseRoutingRules(raw: unknown): RoutingRule[] {
  *
  * Returns the first match or null.
  *
- * **Known limitation (v1):** The `peerSkills` map is not yet populated
- * at runtime — skills-based matching always returns no match. Use
- * `pattern` or `tags` criteria for now. Wiring peer skill caching from
- * health-check Agent Card discovery is planned for a future release.
+ * The `peerSkills` map is populated from Agent Card discovery during
+ * periodic health checks. Skills are cached per peer and refreshed
+ * on each successful health check probe.
  */
 export function matchRule(
   rules: RoutingRule[],

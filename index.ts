@@ -289,7 +289,14 @@ const plugin = {
           config.resilience.circuitBreaker,
           async (peer) => {
             try {
-              await client.discoverAgentCard(peer, config.resilience.healthCheck.timeoutMs);
+              const card = await client.discoverAgentCard(peer, config.resilience.healthCheck.timeoutMs);
+              // Cache skills from Agent Card for routing rule matching
+              const skills = Array.isArray(card?.skills)
+                ? (card.skills as Array<Record<string, unknown>>)
+                    .map((s) => (typeof s === "string" ? s : typeof s?.id === "string" ? s.id : ""))
+                    .filter((id) => id.length > 0)
+                : [];
+              healthManager!.updateSkills(peer.name, skills);
               return true;
             } catch {
               return false;
@@ -583,7 +590,8 @@ const plugin = {
         const msgTags = Array.isArray(message.tags)
           ? (message.tags as unknown[]).filter((t): t is string => typeof t === "string")
           : [];
-        const routeMatch = matchRule(config.routing.rules, { text: msgText, tags: msgTags });
+        const peerSkills = healthManager?.getPeerSkills();
+        const routeMatch = matchRule(config.routing.rules, { text: msgText, tags: msgTags }, peerSkills);
         if (routeMatch) {
           peerName = routeMatch.peer;
           if (routeMatch.agentId && !message.agentId) {
