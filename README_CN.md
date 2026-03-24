@@ -1,22 +1,38 @@
-# 🦞OpenClaw A2A Gateway 插件
+# 🦞 OpenClaw A2A Gateway 插件
 
-[OpenClaw](https://github.com/openclaw/openclaw) 插件，实现 [A2A (Agent-to-Agent) v0.3.0 协议](https://github.com/google/A2A)，让不同服务器上的 OpenClaw Agent 互相通信。
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![A2A v0.3.0](https://img.shields.io/badge/A2A-v0.3.0-green.svg)](https://github.com/google/A2A)
+[![Tests](https://img.shields.io/badge/tests-360%20passing-brightgreen.svg)]()
+[![Node](https://img.shields.io/badge/node-%E2%89%A522-blue.svg)]()
 
-## 功能
+[OpenClaw](https://github.com/openclaw/openclaw) 插件，实现 [A2A (Agent-to-Agent) v0.3.0 协议](https://github.com/google/A2A)，让不同服务器上的 OpenClaw Agent 自动发现、安全通信——零配置即可启动。
 
-- 暴露 **A2A 标准端点**（JSON-RPC + REST），其他 Agent 可以发消息给你的 Agent
-- 在 `/.well-known/agent-card.json` 发布 **Agent Card**，支持对等发现（兼容别名：`/.well-known/agent.json`）
-- 支持 **Bearer Token 认证**，确保安全的跨 Agent 通信
-- 将入站 A2A 消息路由到你的 OpenClaw Agent 并返回响应
-- 你的 Agent 也可以 **主动调用对等 Agent**
-- 端到端支持 **A2A Part 类型**：`TextPart`、`FilePart`（URI + base64）、`DataPart`（结构化 JSON）
-- 提供 **`a2a_send_file` Agent 工具**，让 Agent 能以编程方式发送文件给 Peer
-- **SSE 流式输出** + 心跳 keep-alive，实时状态更新
-- **Peer 韧性**：健康检查 + 指数退避重试 + 熔断器
-- **多 Token 轮换**，零停机更换凭证
+## 核心特性
+
+### 传输与协议
+- **三种传输方式**：JSON-RPC、REST、gRPC——支持自动降级（JSON-RPC → REST → gRPC）
+- **SSE 流式输出** + 心跳 keep-alive，实时任务状态
+- **完整 Part 支持**：TextPart、FilePart（URI + base64）、DataPart（结构化 JSON）
+- **URL 自动提取**：Agent 文本回复中的文件链接自动转为出站 FilePart
+
+### 智能路由
+- **规则路由**：按消息模式、标签或 Peer 技能自动选择目标
+- **Peer 技能缓存**：健康检查时从 Agent Card 提取技能，驱动 skills 路由匹配
+- **指定 agentId 路由**：单条消息可路由到 Peer 上的特定 OpenClaw Agent
+
+### 发现与韧性
+- **DNS-SD 发现**：通过 `_a2a._tcp` SRV + TXT 记录自动发现 Peer
+- **mDNS 自广播**：发布 SRV + TXT 记录，让其他 Gateway 自动发现你
+- **健康检查** + 指数退避 + 熔断器（closed → open → half-open）
+- **Push 通知**：任务完成时 webhook 回调，HMAC 签名 + SSRF 防护
+
+### 安全与可观测
+- **Bearer Token 认证**，多 Token 零停机轮换
+- **SSRF 防护**：URI 白名单、MIME 白名单、文件大小限制
+- **Ed25519 设备身份**，兼容 OpenClaw ≥2026.3.13 scope 验证
 - **JSONL 审计日志**，记录所有 A2A 调用和安全事件
-- **Ed25519 设备身份**，兼容 OpenClaw ≥2026.3.13 scope 验证（旧版本自动降级）
-- **跨平台**默认路径（`~/.openclaw/a2a-tasks`）
+- **Telemetry 指标端点**，可选 Bearer 认证
+- **磁盘持久化任务存储**，TTL 自动清理 + 并发限制
 
 ## 架构
 
@@ -545,32 +561,17 @@ Skill 提供两种 agent 调用方式：
 
 Agent 会自动按照 skill 的流程执行。
 
-## TODO / 路线图
+## 版本历史
 
-### 已完成
+| 版本 | 亮点 |
+|------|------|
+| **v1.2.0** | Peer 技能路由生效，mDNS 自广播（对称发现闭环） |
+| **v1.1.0** | URL 提取、传输降级、Push 通知、规则路由、DNS-SD 发现 |
+| **v1.0.1** | Ed25519 设备身份、Metrics 鉴权、CI |
+| **v1.0.0** | 生产就绪：持久化、多轮对话、文件传输、SSE、健康检查、多 Token、审计 |
+| **v0.1.0** | A2A v0.3.0 初始实现 |
 
-- ✅ **P0** 任务持久化 + 并发限制 + 结构化日志与指标 (PR #14)
-- ✅ **P1** 多轮对话支持，contextId 续聊 + history 携带 (PR #15)
-- ✅ **P2** 文件传输 (FilePart/DataPart) + SSRF 防护 + MIME 白名单 (PR #16)
-- ✅ **P3** Task TTL 自动清理，可配置过期时间 (PR #19)
-- ✅ **P4** SSE 流式输出 + 心跳 keep-alive (PR #21, #22)
-- ✅ **P5** Peer 健康检查 + 指数退避重试 + 熔断器 (PR #22)
-- ✅ **P6** 多 Token 支持，零停机轮换 (PR #23)
-- ✅ **P7** JSONL 审计日志 (PR #24)
-- ✅ **P9** 跨平台 tasksDir 默认路径 `~/.openclaw/a2a-tasks` (direct commit)
-- ✅ **v1.0.1** Ed25519 设备身份，兼容 OpenClaw ≥2026.3.13 scope 验证 (commit 84f440c)
-- ✅ Metrics 端点可选 bearer 鉴权（`observability.metricsAuth: "bearer"`）
-- ✅ 从 Agent 文本回复中提取文件 URL 为出站 FilePart (PR #35)
-- ✅ 跨实现兼容性测试矩阵 ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)) (PR #36)
-- ✅ **P10** 自动传输降级：JSON-RPC → REST → gRPC (PR #37)
-- ✅ **P8** Push notifications：任务完成时 webhook 回调 (PR #38)
-- ✅ 规则路由：按消息 pattern/tags/skills 自动选择 peer + agentId (PR #39)
-- ✅ DNS-SD 动态 Agent 发现：SRV + TXT 记录 (PR #40)
-- ✅ peer Agent Card skills 缓存已接入路由规则（skills 匹配生效）
-- ✅ mDNS 自广播 — 发布 SRV + TXT 记录，其他 gateway 可自动发现本实例（`advertise.enabled: true`）
-
-### 待做（欢迎 PR）
-- 对接 SDK 原生 Push Notification 流程（当前为自定义实现）
+详见 [CHANGELOG.md](CHANGELOG.md) 和 [Releases](https://github.com/win4r/openclaw-a2a-gateway/releases)。
 
 ## 许可证
 

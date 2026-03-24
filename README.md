@@ -1,24 +1,40 @@
-# 🦞OpenClaw A2A Gateway Plugin
+# 🦞 OpenClaw A2A Gateway Plugin
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![A2A v0.3.0](https://img.shields.io/badge/A2A-v0.3.0-green.svg)](https://github.com/google/A2A)
+[![Tests](https://img.shields.io/badge/tests-360%20passing-brightgreen.svg)]()
+[![Node](https://img.shields.io/badge/node-%E2%89%A522-blue.svg)]()
 
 **English** | [简体中文](README_CN.md)
 
-An [OpenClaw](https://github.com/openclaw/openclaw) plugin that implements the [A2A (Agent-to-Agent) v0.3.0 protocol](https://github.com/google/A2A), enabling OpenClaw agents to communicate with each other across different servers.
+A production-ready [OpenClaw](https://github.com/openclaw/openclaw) plugin that implements the [A2A (Agent-to-Agent) v0.3.0 protocol](https://github.com/google/A2A), enabling OpenClaw agents to discover and communicate with each other across servers — with zero-config install and automatic peer discovery.
 
-## What It Does
+## Key Features
 
-- Exposes an **A2A-compliant endpoint** (JSON-RPC + REST) so other agents can send messages to your OpenClaw agent
-- Publishes an **Agent Card** at `/.well-known/agent-card.json` for peer discovery (legacy alias: `/.well-known/agent.json`)
-- Supports **bearer token authentication** for secure inter-agent communication
-- Routes inbound A2A messages to your OpenClaw agent and returns the response
-- Allows your agent to **call peer agents** via the A2A protocol
-- Handles **A2A Part types** end-to-end: `TextPart`, `FilePart` (URI + base64), and `DataPart` (structured JSON)
-- Provides an **`a2a_send_file` agent tool** so your agent can send files to peers programmatically
-- **SSE streaming** with heartbeat keep-alive for real-time status updates
-- **Peer resilience**: health checks, retry with exponential backoff, circuit breaker
-- **Multi-token rotation** for zero-downtime credential changes
+### Transport & Protocol
+- **Three transports**: JSON-RPC, REST, and gRPC — with automatic fallback (tries JSON-RPC → REST → gRPC)
+- **SSE streaming** with heartbeat keep-alive for real-time task status
+- **Full Part type support**: TextPart, FilePart (URI + base64), DataPart (structured JSON)
+- **Auto URL extraction**: file URLs in agent text responses are promoted to outbound FileParts
+
+### Intelligent Routing
+- **Rule-based routing**: auto-select peer by message pattern, tags, or peer skills
+- **Peer skills caching**: Agent Card skills extracted during health checks, enabling skills-based routing
+- **Per-message agentId targeting**: route to specific OpenClaw agents on the peer (OpenClaw extension)
+
+### Discovery & Resilience
+- **DNS-SD discovery**: auto-discover peers via `_a2a._tcp` SRV + TXT records
+- **mDNS self-advertisement**: publish SRV + TXT records so other gateways find you automatically
+- **Health checks** with exponential backoff + circuit breaker (closed → open → half-open)
+- **Push notifications**: webhook delivery on task completion with HMAC + SSRF validation
+
+### Security & Observability
+- **Bearer token auth** with multi-token zero-downtime rotation
+- **SSRF protection**: URI hostname allowlist, MIME allowlist, file size limits
+- **Ed25519 device identity** for OpenClaw ≥2026.3.13 scope compatibility
 - **JSONL audit trail** for all A2A calls and security events
-- **Ed25519 device identity** for OpenClaw ≥2026.3.13 scope compatibility (auto-fallback for older versions)
-- **Cross-platform** default paths (`~/.openclaw/a2a-tasks`)
+- **Telemetry metrics** endpoint with optional bearer auth
+- **Durable task store** on disk with TTL cleanup and concurrency limits
 
 ## Architecture
 
@@ -404,6 +420,8 @@ node <PLUGIN_PATH>/skill/scripts/a2a-send.mjs \
 
 ## Configuration Reference
 
+### Core
+
 | Path | Type | Default | Description |
 |------|------|---------|-------------|
 | `agentCard.name` | string | `OpenClaw A2A Gateway` | Display name for this agent |
@@ -411,35 +429,96 @@ node <PLUGIN_PATH>/skill/scripts/a2a-send.mjs \
 | `agentCard.url` | string | auto | JSON-RPC endpoint URL |
 | `agentCard.skills` | array | `[{chat}]` | List of skills this agent offers |
 | `server.host` | string | `0.0.0.0` | Bind address |
-| `server.port` | number | `18800` | A2A server port |
+| `server.port` | number | `18800` | A2A HTTP port (gRPC on port+1) |
 | `storage.tasksDir` | string | `~/.openclaw/a2a-tasks` | Durable on-disk task store path |
+| `storage.taskTtlHours` | number | `72` | Auto-cleanup expired tasks after N hours |
+| `storage.cleanupIntervalMinutes` | number | `60` | How often to scan for expired tasks |
+
+### Peers
+
+| Path | Type | Default | Description |
+|------|------|---------|-------------|
 | `peers` | array | `[]` | List of peer agents |
 | `peers[].name` | string | *required* | Peer display name |
 | `peers[].agentCardUrl` | string | *required* | URL to peer's Agent Card |
 | `peers[].auth.type` | string | — | `bearer` or `apiKey` |
 | `peers[].auth.token` | string | — | Authentication token |
+
+### Security
+
+| Path | Type | Default | Description |
+|------|------|---------|-------------|
 | `security.inboundAuth` | string | `none` | `none` or `bearer` |
-| `security.token` | string | — | Token for inbound auth |
-| `security.allowedMimeTypes` | array | `["image/*","application/pdf","text/plain","text/csv","application/json","audio/*","video/*"]` | Allowed MIME patterns for file transfer |
+| `security.token` | string | — | Single token for inbound auth |
+| `security.tokens` | array | `[]` | Multiple tokens for zero-downtime rotation |
+| `security.allowedMimeTypes` | array | `[image/*, application/pdf, ...]` | Allowed MIME patterns for file transfer |
 | `security.maxFileSizeBytes` | number | `52428800` | Max file size for URI-based files (50MB) |
-| `security.maxInlineFileSizeBytes` | number | `10485760` | Max file size for inline base64 files (10MB) |
-| `security.fileUriAllowlist` | array | `[]` | URI hostname allowlist (e.g. `["*.trusted.com"]`). Empty = allow all public hosts |
+| `security.maxInlineFileSizeBytes` | number | `10485760` | Max inline base64 file size (10MB) |
+| `security.fileUriAllowlist` | array | `[]` | URI hostname allowlist (empty = allow all public) |
+
+### Routing
+
+| Path | Type | Default | Description |
+|------|------|---------|-------------|
 | `routing.defaultAgentId` | string | `default` | Agent ID for inbound messages |
-| `timeouts.agentResponseTimeoutMs` | number | `300000` | Max wait time (ms) for agent response |
-| `limits.maxConcurrentTasks` | number | `4` | Max active inbound agent runs |
-| `limits.maxQueuedTasks` | number | `100` | Max queued inbound tasks before rejection |
+| `routing.rules` | array | `[]` | Rule-based routing rules (see below) |
+| `routing.rules[].name` | string | *required* | Rule name |
+| `routing.rules[].match.pattern` | string | — | Regex to match message text (case-insensitive) |
+| `routing.rules[].match.tags` | array | — | Match if message has any of these tags |
+| `routing.rules[].match.skills` | array | — | Match if target peer has any of these skills |
+| `routing.rules[].target.peer` | string | *required* | Peer to route to |
+| `routing.rules[].target.agentId` | string | — | Override agentId on the peer |
+| `routing.rules[].priority` | number | `0` | Higher = checked first |
+
+### Resilience
+
+| Path | Type | Default | Description |
+|------|------|---------|-------------|
+| `resilience.healthCheck.enabled` | boolean | `true` | Enable periodic Agent Card probes |
+| `resilience.healthCheck.intervalMs` | number | `30000` | Probe interval (ms) |
+| `resilience.healthCheck.timeoutMs` | number | `5000` | Probe timeout (ms) |
+| `resilience.retry.maxRetries` | number | `3` | Max retries for failed outbound calls |
+| `resilience.retry.baseDelayMs` | number | `1000` | Base delay for exponential backoff |
+| `resilience.retry.maxDelayMs` | number | `10000` | Max delay cap |
+| `resilience.circuitBreaker.failureThreshold` | number | `5` | Failures before circuit opens |
+| `resilience.circuitBreaker.resetTimeoutMs` | number | `30000` | Cooldown before half-open probe |
+
+### Discovery & Advertisement
+
+| Path | Type | Default | Description |
+|------|------|---------|-------------|
+| `discovery.enabled` | boolean | `false` | Enable DNS-SD peer discovery |
+| `discovery.serviceName` | string | `_a2a._tcp.local` | DNS-SD service name to query |
+| `discovery.refreshIntervalMs` | number | `30000` | How often to re-query DNS (ms) |
+| `discovery.mergeWithStatic` | boolean | `true` | Merge discovered peers with static config |
+| `advertise.enabled` | boolean | `false` | Enable mDNS self-advertisement |
+| `advertise.serviceName` | string | `_a2a._tcp.local` | DNS-SD service type to advertise |
+| `advertise.ttl` | number | `120` | TTL in seconds for advertised records |
+
+### Observability
+
+| Path | Type | Default | Description |
+|------|------|---------|-------------|
 | `observability.structuredLogs` | boolean | `true` | Emit JSON structured logs |
 | `observability.exposeMetricsEndpoint` | boolean | `true` | Expose telemetry snapshot over HTTP |
-| `observability.metricsPath` | string | `/a2a/metrics` | HTTP path for telemetry snapshot |
+| `observability.metricsPath` | string | `/a2a/metrics` | HTTP path for telemetry |
+| `observability.metricsAuth` | string | `none` | `none` or `bearer` for metrics endpoint |
+| `observability.auditLogPath` | string | `~/.openclaw/a2a-audit.jsonl` | Path for JSONL audit log |
+| `timeouts.agentResponseTimeoutMs` | number | `300000` | Max wait for agent response (ms) |
+| `limits.maxConcurrentTasks` | number | `4` | Max active inbound agent runs |
+| `limits.maxQueuedTasks` | number | `100` | Max queued tasks before rejection |
 
 ## Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/.well-known/agent-card.json` | GET | Agent Card (discovery) *(legacy alias: `/.well-known/agent.json`)* |
-| `/a2a/jsonrpc` | POST | A2A JSON-RPC (message/send) |
+| `/.well-known/agent-card.json` | GET | Agent Card discovery *(alias: `/.well-known/agent.json`)* |
+| `/a2a/jsonrpc` | POST | A2A JSON-RPC transport |
 | `/a2a/rest` | POST | A2A REST transport |
-| `/a2a/metrics` | GET | JSON telemetry snapshot (if enabled) |
+| `<host>:<port+1>` | gRPC | A2A gRPC transport |
+| `/a2a/metrics` | GET | Telemetry snapshot (optional bearer auth) |
+| `/a2a/push/register` | POST | Register push notification webhook |
+| `/a2a/push/:taskId` | DELETE | Unregister push notification |
 
 ## Troubleshooting
 
@@ -555,32 +634,17 @@ Once installed, tell your agent:
 
 The agent will follow the skill's procedure automatically.
 
-## TODO / Roadmap
+## Version History
 
-### Completed
+| Version | Highlights |
+|---------|-----------|
+| **v1.2.0** | Peer skills routing, mDNS self-advertisement (symmetric discovery) |
+| **v1.1.0** | URL extraction, transport fallback, push notifications, rule-based routing, DNS-SD discovery |
+| **v1.0.1** | Ed25519 device identity, metrics auth, CI |
+| **v1.0.0** | Production-ready: persistence, multi-round, file transfer, SSE, health checks, multi-token, audit |
+| **v0.1.0** | Initial A2A v0.3.0 implementation |
 
-- ✅ **P0** Persist tasks to disk, concurrency limits, structured logs + metrics (PR #14)
-- ✅ **P1** Multi-round conversation support with contextId/history (PR #15)
-- ✅ **P2** File transfer (FilePart/DataPart) + SSRF protections + MIME allowlist (PR #16)
-- ✅ **P3** Task TTL cleanup with configurable expiration (PR #19)
-- ✅ **P4** SSE streaming with heartbeat keep-alive (PR #21, #22)
-- ✅ **P5** Peer health checks + retry with exponential backoff + circuit breaker (PR #22)
-- ✅ **P6** Multi-token support for zero-downtime rotation (PR #23)
-- ✅ **P7** JSONL audit trail for A2A calls (PR #24)
-- ✅ **P9** Cross-platform tasksDir default path `~/.openclaw/a2a-tasks` (direct commit)
-- ✅ **v1.0.1** Ed25519 device identity for OpenClaw ≥2026.3.13 scope compatibility (commit 84f440c)
-- ✅ Metrics endpoint optional bearer auth (`observability.metricsAuth: "bearer"`)
-- ✅ Extract file URLs from agent text responses (markdown links, bare URLs) into outbound FileParts — only recognized file extensions are promoted
-- ✅ Cross-implementation compatibility test matrix ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md))
-- ✅ **P10** Automatic transport fallback: JSON-RPC → REST → gRPC with retryable-error classification
-- ✅ **P8** Push notifications for long-running tasks — webhook delivery on terminal states (PR #38)
-- ✅ Rule-based routing: auto-select peer + agentId based on message pattern/tags/skills (PR #39)
-- ✅ DNS-SD dynamic agent discovery via SRV + TXT records (PR #40)
-- ✅ `peerSkills` map wired from Agent Card health-check cache into routing rules (skills matching now works)
-- ✅ mDNS self-advertisement — publish SRV + TXT records so other gateways discover this instance automatically (`advertise.enabled: true`)
-
-### Next
-- SDK-native push notification integration (currently custom implementation with `pushNotifications: false`)
+See [CHANGELOG.md](CHANGELOG.md) for full details and [Releases](https://github.com/win4r/openclaw-a2a-gateway/releases) for downloads.
 
 ## License
 
