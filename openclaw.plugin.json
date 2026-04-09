@@ -310,6 +310,81 @@
             "description": "When true, discovered peers supplement static peers config. Static peers take precedence on name collision."
           }
         }
+      },
+      "mesh": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Mesh/P2P demo control plane over A2A. Disabled by default.",
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "nodeId": { "type": "string", "description": "Unique mesh node id for this gateway." },
+          "runtimeType": {
+            "type": "string",
+            "enum": ["openclaw", "ollama-adapter"],
+            "default": "openclaw"
+          },
+          "seedPeers": {
+            "type": "array",
+            "description": "Static seed peers for mesh neighbor bootstrap.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string" },
+                "agentCardUrl": { "type": "string" },
+                "auth": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": { "type": "string", "enum": ["bearer", "apiKey"] },
+                    "token": { "type": "string" }
+                  },
+                  "required": ["type", "token"]
+                }
+              },
+              "required": ["name", "agentCardUrl"]
+            }
+          },
+          "coordinator": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "fallbackNodeId": { "type": "string", "default": "" }
+            }
+          },
+          "heartbeat": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "intervalMs": { "type": "number", "default": 5000, "minimum": 1000 },
+              "suspectThreshold": { "type": "number", "default": 3, "minimum": 1 },
+              "offlineThreshold": { "type": "number", "default": 5, "minimum": 1 }
+            }
+          },
+          "scheduler": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "maxFanout": { "type": "number", "default": 4, "minimum": 1 },
+              "fullMeshMaxNodes": { "type": "number", "default": 6, "minimum": 2 }
+            }
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "skillId": { "type": "string" },
+                "tags": { "type": "array", "items": { "type": "string" } },
+                "runtimeType": { "type": "string", "enum": ["openclaw", "ollama-adapter"] },
+                "costHint": { "type": "number", "default": 1, "minimum": 0.1 },
+                "latencyHint": { "type": "number", "default": 1, "minimum": 0.1 }
+              },
+              "required": ["skillId"]
+            }
+          }
+        }
       }
     }
   },
@@ -324,6 +399,15 @@
     "security": {
       "token": { "sensitive": true },
       "tokens": { "items": { "sensitive": true } }
+    },
+    "mesh": {
+      "seedPeers": {
+        "items": {
+          "auth": {
+            "token": { "sensitive": true }
+          }
+        }
+      }
     }
   }
 }

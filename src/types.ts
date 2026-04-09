@@ -12,6 +12,7 @@
 // IMPORTANT: keep these as type-only exports so the plugin has no runtime
 // dependency on OpenClaw as an npm package.
 export type { OpenClawPluginApi, PluginLogger, OpenClawConfig } from "openclaw/plugin-sdk";
+import type { MeshConfig } from "./mesh-types.js";
 
 // ---------------------------------------------------------------------------
 // A2A peer / auth configuration
@@ -121,6 +122,8 @@ export interface GatewayConfig {
   discovery: DnsDiscoveryConfig;
   /** mDNS advertisement configuration. Disabled by default. */
   advertise: import("./dns-responder.js").MdnsAdvertiseConfig;
+  /** Mesh/P2P collaboration demo configuration. Disabled by default. */
+  mesh: MeshConfig;
 }
 
 // ---------------------------------------------------------------------------

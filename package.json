@@ -5,7 +5,9 @@
   "description": "OpenClaw A2A gateway plugin implementing the A2A v0.3.0 protocol surface",
   "main": "index.ts",
   "scripts": {
-    "test": "node --import tsx --test tests/*.test.ts"
+    "test": "node --import tsx --test tests/*.test.ts",
+    "mesh:cli": "node scripts/mesh-cli.mjs",
+    "mesh:ollama-adapter": "node scripts/ollama-a2a-adapter.mjs"
   },
   "dependencies": {
     "@a2a-js/sdk": "^0.3.13",

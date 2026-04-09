@@ -36,6 +36,8 @@ import { GatewayTelemetry } from "./src/telemetry.js";
 import { AuditLogger } from "./src/audit.js";
 import { PeerHealthManager } from "./src/peer-health.js";
 import { PushNotificationStore } from "./src/push-notifications.js";
+import { MeshNetworkManager } from "./src/mesh-control.js";
+import { renderMeshDashboardHtml } from "./src/mesh-dashboard.js";
 import type {
   AgentCardConfig,
   GatewayConfig,
@@ -48,6 +50,7 @@ import {
   validateMimeType,
 } from "./src/file-security.js";
 import { parseRoutingRules, matchRule } from "./src/routing-rules.js";
+import type { MeshCapability, MeshRuntimeType } from "./src/mesh-types.js";
 
 /** Build a JSON-RPC error response. */
 function jsonRpcError(id: string | number | null, code: number, message: string) {
@@ -96,9 +99,23 @@ function resolveConfiguredPath(
   fallback: string,
   resolvePath?: (nextPath: string) => string,
 ): string {
-  const configured = asString(value, "").trim() || fallback;
+  const rawConfigured = asString(value, "").trim();
+  const configured = rawConfigured || fallback;
   const resolved = resolvePath ? resolvePath(configured) : configured;
-  return path.isAbsolute(resolved) ? resolved : path.resolve(resolved);
+  if (path.isAbsolute(resolved)) {
+    return resolved;
+  }
+
+  const absolute = path.resolve(resolved);
+
+  // Backward-compat: when users provide a relative path using POSIX separators
+  // (e.g. "data/tasks"), keep "/" in the final absolute path string on Windows.
+  // Existing defaults remain platform-native because rawConfigured is empty.
+  if (path.sep === "\\" && rawConfigured.includes("/") && !rawConfigured.includes("\\")) {
+    return absolute.replace(/\\/g, "/");
+  }
+
+  return absolute;
 }
 
 function parseAgentCard(raw: Record<string, unknown>): AgentCardConfig {
@@ -151,6 +168,69 @@ function parsePeers(raw: unknown): PeerConfig[] {
   return peers;
 }
 
+function parseMeshRuntimeType(raw: unknown): MeshRuntimeType {
+  return raw === "ollama-adapter" ? "ollama-adapter" : "openclaw";
+}
+
+function parseMeshCapabilities(
+  raw: unknown,
+  fallbackSkills: AgentCardConfig["skills"],
+  runtimeType: MeshRuntimeType,
+): MeshCapability[] {
+  const capabilities: MeshCapability[] = [];
+  const source = Array.isArray(raw) ? raw : [];
+
+  for (const entry of source) {
+    const value = asObject(entry);
+    const skillId = asString(value.skillId, "").trim();
+    if (!skillId) continue;
+    const tags = Array.isArray(value.tags)
+      ? value.tags.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+      : [];
+    capabilities.push({
+      skillId,
+      tags,
+      runtimeType: typeof value.runtimeType === "string" ? parseMeshRuntimeType(value.runtimeType) : runtimeType,
+      costHint: Math.max(0.1, asNumber(value.costHint, 1)),
+      latencyHint: Math.max(0.1, asNumber(value.latencyHint, 1)),
+    });
+  }
+
+  if (capabilities.length > 0) {
+    return capabilities;
+  }
+
+  let index = 0;
+  for (const skill of fallbackSkills) {
+    if (typeof skill === "string") {
+      const name = skill.trim();
+      if (!name) continue;
+      capabilities.push({
+        skillId: name,
+        tags: [],
+        runtimeType,
+        costHint: 1 + index * 0.01,
+        latencyHint: 1,
+      });
+      index += 1;
+      continue;
+    }
+
+    const name = asString(asObject(skill).id, "").trim() || asString(asObject(skill).name, "").trim();
+    if (!name) continue;
+    capabilities.push({
+      skillId: name,
+      tags: [],
+      runtimeType,
+      costHint: 1 + index * 0.01,
+      latencyHint: 1,
+    });
+    index += 1;
+  }
+
+  return capabilities;
+}
+
 export function parseConfig(raw: unknown, resolvePath?: (nextPath: string) => string): GatewayConfig {
   const config = asObject(raw);
   const server = asObject(config.server);
@@ -161,6 +241,7 @@ export function parseConfig(raw: unknown, resolvePath?: (nextPath: string) => st
   const observability = asObject(config.observability);
   const timeouts = asObject(config.timeouts);
   const resilience = asObject(config.resilience);
+  const mesh = asObject(config.mesh);
   const healthCheck = asObject(resilience.healthCheck);
   const retry = asObject(resilience.retry);
   const circuitBreaker = asObject(resilience.circuitBreaker);
@@ -178,9 +259,13 @@ export function parseConfig(raw: unknown, resolvePath?: (nextPath: string) => st
     : defaultMimeTypes;
   const rawUriAllowlist = Array.isArray(security.fileUriAllowlist) ? security.fileUriAllowlist : [];
   const fileUriAllowlist = rawUriAllowlist.filter((v: unknown) => typeof v === "string") as string[];
+  const parsedAgentCard = parseAgentCard(asObject(config.agentCard));
+  const meshRuntimeType = parseMeshRuntimeType(mesh.runtimeType);
+  const meshSeedPeers = parsePeers(mesh.seedPeers);
+  const meshCapabilities = parseMeshCapabilities(mesh.capabilities, parsedAgentCard.skills, meshRuntimeType);
 
   return {
-    agentCard: parseAgentCard(asObject(config.agentCard)),
+    agentCard: parsedAgentCard,
     server: {
       host: asString(server.host, "0.0.0.0"),
       port: asNumber(server.port, 18800),
@@ -261,6 +346,25 @@ export function parseConfig(raw: unknown, resolvePath?: (nextPath: string) => st
       token: asString(asObject(config.security).token, "") || undefined,
       raw: config.advertise ? asObject(config.advertise) : undefined,
     }),
+    mesh: {
+      enabled: asBoolean(mesh.enabled, false),
+      nodeId: asString(mesh.nodeId, `node-${os.hostname() || "local"}`).trim() || `node-${os.hostname() || "local"}`,
+      runtimeType: meshRuntimeType,
+      seedPeers: meshSeedPeers,
+      coordinator: {
+        fallbackNodeId: asString(asObject(mesh.coordinator).fallbackNodeId, "").trim(),
+      },
+      heartbeat: {
+        intervalMs: Math.max(1000, asNumber(asObject(mesh.heartbeat).intervalMs, 5000)),
+        suspectThreshold: Math.max(1, Math.floor(asNumber(asObject(mesh.heartbeat).suspectThreshold, 3))),
+        offlineThreshold: Math.max(1, Math.floor(asNumber(asObject(mesh.heartbeat).offlineThreshold, 5))),
+      },
+      scheduler: {
+        maxFanout: Math.max(1, Math.floor(asNumber(asObject(mesh.scheduler).maxFanout, 4))),
+        fullMeshMaxNodes: Math.max(2, Math.floor(asNumber(asObject(mesh.scheduler).fullMeshMaxNodes, 6))),
+      },
+      capabilities: meshCapabilities,
+    },
   };
 }
 
@@ -286,8 +390,9 @@ const plugin = {
     const pushStore = new PushNotificationStore();
     const client = new A2AClient();
     const taskStore = new FileTaskStore(config.storage.tasksDir);
+    const baseExecutor = new OpenClawAgentExecutor(api, config);
     const executor = new QueueingAgentExecutor(
-      new OpenClawAgentExecutor(api, config),
+      baseExecutor,
       telemetry,
       config.limits,
     );
@@ -363,6 +468,29 @@ const plugin = {
       }
       return mergeWithStaticPeers(config.peers, discoveryManager.getDiscoveredPeers());
     };
+
+    const localMeshSkills = config.agentCard.skills
+      .map((entry) => {
+        if (typeof entry === "string") return entry.trim();
+        const value = asObject(entry);
+        return asString(value.id, "").trim() || asString(value.name, "").trim();
+      })
+      .filter((v): v is string => v.length > 0);
+
+    const meshManager = config.mesh.enabled
+      ? new MeshNetworkManager({
+          config: config.mesh,
+          localSkills: localMeshSkills,
+          localCapabilities: config.mesh.capabilities,
+          client,
+          getPeers: getEffectivePeers,
+          logger: api.logger,
+        })
+      : null;
+
+    if (meshManager) {
+      baseExecutor.setMeshControlPlane(meshManager);
+    }
 
     /**
      * Look up a peer by name from the effective peer list.
@@ -545,6 +673,90 @@ const plugin = {
       res.json({ taskId, removed: existed });
     });
 
+    // Mesh demo endpoints (CLI + dashboard)
+    app.post("/a2a/mesh/node/start", pushAuthMiddleware, async (_req, res) => {
+      if (!meshManager) {
+        res.status(404).json({ error: "mesh is disabled" });
+        return;
+      }
+      await meshManager.start();
+      res.json({ started: meshManager.isStarted(), node: meshManager.getNodeStatus() });
+    });
+
+    app.get("/a2a/mesh/node/status", pushAuthMiddleware, (_req, res) => {
+      if (!meshManager) {
+        res.status(404).json({ error: "mesh is disabled" });
+        return;
+      }
+      res.json(meshManager.getNodeStatus());
+    });
+
+    app.get("/a2a/mesh/neighbors", pushAuthMiddleware, (_req, res) => {
+      if (!meshManager) {
+        res.status(404).json({ error: "mesh is disabled" });
+        return;
+      }
+      res.json({ neighbors: meshManager.listNeighbors() });
+    });
+
+    app.post("/a2a/mesh/task/submit", pushAuthMiddleware, express.json(), async (req, res) => {
+      if (!meshManager) {
+        res.status(404).json({ error: "mesh is disabled" });
+        return;
+      }
+      const payload = asObject(req.body);
+      try {
+        const result = await meshManager.submitTask({
+          goal: asString(payload.goal, ""),
+          requiredSkills: Array.isArray(payload.requiredSkills)
+            ? payload.requiredSkills.filter((s): s is string => typeof s === "string")
+            : undefined,
+          template: (() => {
+            const t = asString(payload.template, "auto");
+            return t === "analyze" || t === "build" || t === "review" || t === "auto" ? t : "auto";
+          })(),
+        });
+        res.json(result);
+      } catch (error: unknown) {
+        res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    app.get("/a2a/mesh/task/:taskId", pushAuthMiddleware, (req, res) => {
+      if (!meshManager) {
+        res.status(404).json({ error: "mesh is disabled" });
+        return;
+      }
+      const taskId = typeof req.params.taskId === "string" ? req.params.taskId : "";
+      const task = meshManager.getTask(taskId);
+      if (!task) {
+        res.status(404).json({ error: "mesh task not found" });
+        return;
+      }
+      res.json(task);
+    });
+
+    app.get("/a2a/mesh/state", pushAuthMiddleware, (_req, res) => {
+      if (!meshManager) {
+        res.status(404).json({ error: "mesh is disabled" });
+        return;
+      }
+      res.json({
+        node: meshManager.getNodeStatus(),
+        neighbors: meshManager.listNeighbors(),
+        tasks: meshManager.listTasks(),
+      });
+    });
+
+    app.get("/a2a/mesh/dashboard", pushAuthMiddleware, (_req, res) => {
+      if (!meshManager) {
+        res.status(404).send("mesh is disabled");
+        return;
+      }
+      res.setHeader("content-type", "text/html; charset=utf-8");
+      res.send(renderMeshDashboardHtml());
+    });
+
     let server: Server | null = null;
     let grpcServer: GrpcServer | null = null;
     let cleanupTimer: ReturnType<typeof setInterval> | null = null;
@@ -671,6 +883,78 @@ const plugin = {
           auditLogger.recordOutbound(peer.name, false, 500, errDuration);
           respond(false, { error: String(error?.message || error) });
         });
+    });
+
+    api.registerGatewayMethod("mesh.node.start", ({ respond }) => {
+      if (!meshManager) {
+        respond(false, { error: "mesh is disabled" });
+        return;
+      }
+      meshManager.start()
+        .then(() => {
+          respond(true, {
+            started: meshManager.isStarted(),
+            node: meshManager.getNodeStatus(),
+          });
+        })
+        .catch((error) => {
+          respond(false, { error: String((error as Error)?.message || error) });
+        });
+    });
+
+    api.registerGatewayMethod("mesh.node.status", ({ respond }) => {
+      if (!meshManager) {
+        respond(false, { error: "mesh is disabled" });
+        return;
+      }
+      respond(true, meshManager.getNodeStatus());
+    });
+
+    api.registerGatewayMethod("mesh.neighbors.list", ({ respond }) => {
+      if (!meshManager) {
+        respond(false, { error: "mesh is disabled" });
+        return;
+      }
+      respond(true, { neighbors: meshManager.listNeighbors() });
+    });
+
+    api.registerGatewayMethod("mesh.task.submit", ({ params, respond }) => {
+      if (!meshManager) {
+        respond(false, { error: "mesh is disabled" });
+        return;
+      }
+      const payload = asObject(params);
+      const goal = asString(payload.goal, "");
+      const requiredSkills = Array.isArray(payload.requiredSkills)
+        ? payload.requiredSkills.filter((s): s is string => typeof s === "string")
+        : undefined;
+      const templateRaw = asString(payload.template, "auto");
+      const template = templateRaw === "analyze" || templateRaw === "build" || templateRaw === "review" || templateRaw === "auto"
+        ? templateRaw
+        : "auto";
+
+      meshManager.submitTask({ goal, requiredSkills, template })
+        .then((result) => respond(true, result))
+        .catch((error) => respond(false, { error: String((error as Error)?.message || error) }));
+    });
+
+    api.registerGatewayMethod("mesh.task.status", ({ params, respond }) => {
+      if (!meshManager) {
+        respond(false, { error: "mesh is disabled" });
+        return;
+      }
+      const payload = asObject(params);
+      const meshTaskId = asString(payload.meshTaskId || payload.taskId, "");
+      if (!meshTaskId) {
+        respond(false, { error: "meshTaskId is required" });
+        return;
+      }
+      const task = meshManager.getTask(meshTaskId);
+      if (!task) {
+        respond(false, { error: "mesh task not found" });
+        return;
+      }
+      respond(true, task);
     });
 
     // ------------------------------------------------------------------
@@ -873,8 +1157,16 @@ const plugin = {
 
         // Start mDNS self-advertisement (after HTTP is listening)
         mdnsResponder?.start();
+
+        // Start mesh heartbeat/control plane after server is reachable.
+        if (meshManager) {
+          await meshManager.start();
+          api.logger.info(`a2a-gateway: mesh enabled nodeId=${config.mesh.nodeId} runtime=${config.mesh.runtimeType}`);
+        }
       },
       async stop(_ctx) {
+        meshManager?.stop();
+
         // Stop mDNS self-advertisement (sends goodbye packet)
         mdnsResponder?.stop();
 

@@ -6,3 +6,5 @@ coverage/
 data/
 plan-*.md
 research-*.md
+.claude/
+graphify-out/

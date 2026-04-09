@@ -8,6 +8,7 @@ import type { Message, Part, Task } from "@a2a-js/sdk";
 import type { AgentExecutor, ExecutionEventBus, RequestContext } from "@a2a-js/sdk/server";
 
 import type { GatewayConfig, OpenClawPluginApi } from "./types.js";
+import type { MeshControlPlane } from "./mesh-types.js";
 import {
   validateMimeType,
   validateUriSchemeAndIp,
@@ -932,6 +933,7 @@ export class OpenClawAgentExecutor implements AgentExecutor {
   private readonly agentResponseTimeoutMs: number;
   private readonly security: GatewayConfig["security"];
   private readonly taskContextByTaskId: Map<string, string>;
+  private meshControlPlane: MeshControlPlane | null = null;
 
   constructor(api: OpenClawPluginApi, config: GatewayConfig) {
     this.api = api;
@@ -945,6 +947,10 @@ export class OpenClawAgentExecutor implements AgentExecutor {
         : DEFAULT_AGENT_RESPONSE_TIMEOUT_MS;
 
     this.taskContextByTaskId = new Map();
+  }
+
+  setMeshControlPlane(control: MeshControlPlane | null): void {
+    this.meshControlPlane = control;
   }
 
   async execute(requestContext: RequestContext, eventBus: ExecutionEventBus): Promise<void> {
@@ -965,6 +971,68 @@ export class OpenClawAgentExecutor implements AgentExecutor {
     const existingHistory = rawHistory.length > MAX_HISTORY_MESSAGES
       ? rawHistory.slice(-MAX_HISTORY_MESSAGES)
       : rawHistory;
+
+    if (this.meshControlPlane) {
+      try {
+        const meshResult = await this.meshControlPlane.handleInboundControlMessage(requestContext.userMessage);
+        if (meshResult.handled) {
+          const responseParts = meshResult.responseParts && meshResult.responseParts.length > 0
+            ? meshResult.responseParts
+            : [{ kind: "text" as const, text: "mesh control frame accepted" }];
+
+          const responseMessage: Message = {
+            kind: "message",
+            messageId: uuidv4(),
+            role: "agent",
+            parts: responseParts,
+            contextId,
+          };
+
+          const completedTask: Task = {
+            kind: "task",
+            id: taskId,
+            contextId,
+            status: {
+              state: "completed",
+              message: responseMessage,
+              timestamp: new Date().toISOString(),
+            },
+            history: existingHistory,
+            artifacts: [
+              {
+                artifactId: uuidv4(),
+                parts: responseParts,
+              },
+            ],
+          };
+          eventBus.publish(completedTask);
+          eventBus.finished();
+          return;
+        }
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        const failedTask: Task = {
+          kind: "task",
+          id: taskId,
+          contextId,
+          status: {
+            state: "failed",
+            message: {
+              kind: "message",
+              messageId: uuidv4(),
+              role: "agent",
+              parts: [{ kind: "text", text: `Mesh control handler failed: ${message}` }],
+              contextId,
+            },
+            timestamp: new Date().toISOString(),
+          },
+          history: existingHistory,
+        };
+        eventBus.publish(failedTask);
+        eventBus.finished();
+        return;
+      }
+    }
 
     // Publish initial "working" state so the task is trackable during async dispatch
     const workingTask: Task = {
