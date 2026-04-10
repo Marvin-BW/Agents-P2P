@@ -370,7 +370,7 @@ export class MeshNetworkManager implements MeshControlPlane {
     const stageName = asString(envelope.payload.stageName) || "task-offer";
     const requiredSkills = normalizeStringArray(envelope.payload.requiredSkills as unknown[]);
 
-    const fallbackOutput = `[mesh:${this.config.nodeId}] accepted stage=${stageName}; goal="${truncate(goal, 220)}"; skills=${requiredSkills.join(", ") || this.localSkills.join(", ") || "general"}`;
+    const fallbackOutput = `[mesh:${this.config.nodeId}] accepted stage=${stageName}; goal="${truncate(goal, 220)}"; skills=${requiredSkills.join(", ") || this.localSkills.join(", ") || "general"}; mode=fallback`;
     const accept = this.createFrame("TASK_ACCEPT", {
       acceptedBy: this.config.nodeId,
       stageName,
@@ -380,6 +380,8 @@ export class MeshNetworkManager implements MeshControlPlane {
     const execution = await this.executeTaskOfferLocally(goal, stageName, requiredSkills);
     if (!execution.ok) {
       this.logger.warn(`mesh.task-offer.local-exec.failed node=${this.config.nodeId} stage=${stageName} reason=${execution.error || "unknown"}`);
+    } else {
+      this.logger.info(`mesh.task-offer.local-exec.ok node=${this.config.nodeId} stage=${stageName}`);
     }
 
     const fallbackWithReason = execution.ok
