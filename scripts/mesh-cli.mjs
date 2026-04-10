@@ -90,6 +90,13 @@ async function request(method, url, body, token) {
   return data;
 }
 
+function buildTaskStatusCommand(baseUrl, token, meshTaskId) {
+  const envParts = [`MESH_BASE_URL="${baseUrl}"`];
+  if (token) {
+    envParts.push(`MESH_TOKEN="${token}"`);
+  }
+  return `${envParts.join(" ")} npm run mesh:cli -- task status ${meshTaskId}`;
+}
 async function main() {
   const { positional, options } = parseArgs();
   const [group, action, arg3] = positional;
@@ -132,6 +139,10 @@ async function main() {
       ...(requiredSkills.length > 0 ? { requiredSkills } : {}),
     }, token);
     console.log(JSON.stringify(result, null, 2));
+    const meshTaskId = typeof result?.meshTaskId === "string" ? result.meshTaskId : "";
+    if (meshTaskId) {
+      console.log(buildTaskStatusCommand(baseUrl, token, meshTaskId));
+    }
     return;
   }
 
@@ -152,3 +163,4 @@ main().catch((error) => {
   console.error(error?.message || String(error));
   process.exit(1);
 });
+
