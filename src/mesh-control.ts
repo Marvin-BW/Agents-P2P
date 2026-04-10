@@ -382,9 +382,13 @@ export class MeshNetworkManager implements MeshControlPlane {
       this.logger.warn(`mesh.task-offer.local-exec.failed node=${this.config.nodeId} stage=${stageName} reason=${execution.error || "unknown"}`);
     }
 
+    const fallbackWithReason = execution.ok
+      ? ""
+      : `${fallbackOutput}; fallback="${truncate(execution.error || "local execution unavailable", 180)}"`;
+
     return this.createFrame("TASK_RESULT", {
       stageName,
-      output: execution.ok ? execution.output : fallbackOutput,
+      output: execution.ok ? execution.output : fallbackWithReason,
       acceptedBy: this.config.nodeId,
     }, envelope.meshTaskId, envelope.fromNodeId);
   }

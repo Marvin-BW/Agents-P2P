@@ -135,5 +135,6 @@ describe("MeshNetworkManager TASK_OFFER handling", () => {
     const payload = responseEnvelope.payload as Record<string, unknown>;
     const output = String(payload.output || "");
     assert.ok(output.includes("accepted stage=cross-review"), `unexpected fallback output: ${output}`);
+    assert.ok(output.includes("fallback=\""), `missing fallback reason in output: ${output}`);
   });
 });
