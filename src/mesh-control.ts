@@ -923,25 +923,76 @@ function parseEnvelopeCandidate(value: unknown): MeshControlEnvelope | null {
   };
 }
 
-function extractAnyText(value: unknown): string {
-  if (typeof value === "string") return value;
+function extractAnyText(value: unknown, parentKey = ""): string {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+
+    // Avoid treating structural enum fields (kind/type/state/id...) as content.
+    // This prevents outputs like "task" when the response object is { kind: "task", ... }.
+    const structuralKeys = new Set([
+      "kind",
+      "type",
+      "state",
+      "role",
+      "id",
+      "taskId",
+      "contextId",
+      "messageId",
+      "agentId",
+      "stageId",
+      "nodeId",
+      "timestamp",
+      "transport",
+      "url",
+      "name",
+    ]);
+    if (parentKey && structuralKeys.has(parentKey)) return "";
+
+    return trimmed;
+  }
+
   if (Array.isArray(value)) {
     for (const item of value) {
-      const nested = extractAnyText(item);
+      const nested = extractAnyText(item, parentKey);
       if (nested) return nested;
     }
     return "";
   }
+
   if (!isRecord(value)) return "";
-  if (typeof value.text === "string" && value.text.trim()) return value.text;
+
+  if (typeof value.text === "string" && value.text.trim()) return value.text.trim();
+
   const parts = Array.isArray(value.parts) ? value.parts : [];
   for (const part of parts) {
     if (isRecord(part) && part.kind === "text" && typeof part.text === "string" && part.text.trim()) {
-      return part.text;
+      return part.text.trim();
     }
   }
-  for (const nested of Object.values(value)) {
-    const text = extractAnyText(nested);
+
+  // Prefer well-known content-bearing fields before generic traversal.
+  const preferredKeys = [
+    "message",
+    "status",
+    "result",
+    "response",
+    "output",
+    "content",
+    "data",
+    "artifacts",
+    "history",
+    "error",
+    "reason",
+  ];
+  for (const key of preferredKeys) {
+    if (!(key in value)) continue;
+    const text = extractAnyText((value as Record<string, unknown>)[key], key);
+    if (text) return text;
+  }
+
+  for (const [key, nested] of Object.entries(value)) {
+    const text = extractAnyText(nested, key);
     if (text) return text;
   }
   return "";
