@@ -13,6 +13,7 @@ const MESH_CONTROL_MIME = "application/vnd.a2a.mesh+json";
 
 const HOST = process.env.ADAPTER_HOST || "0.0.0.0";
 const PORT = Number(process.env.ADAPTER_PORT || 18900);
+const ADAPTER_PUBLIC_BASE_URL = process.env.ADAPTER_PUBLIC_BASE_URL || `http://127.0.0.1:${PORT}`;
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3.2";
 const NODE_ID = process.env.MESH_NODE_ID || `ollama-${os.hostname() || "node"}`;
@@ -214,7 +215,7 @@ const agentCard = {
   version: "0.1.0",
   name: `Ollama Adapter (${NODE_ID})`,
   description: "A2A adapter for local Ollama with mesh control-frame support",
-  url: `http://localhost:${PORT}/a2a/jsonrpc`,
+  url: `${ADAPTER_PUBLIC_BASE_URL}/a2a/jsonrpc`,
   skills: SKILLS.map((skill, idx) => ({
     id: `${skill}-${idx + 1}`,
     name: skill,
@@ -232,8 +233,8 @@ const agentCard = {
   defaultInputModes: ["text"],
   defaultOutputModes: ["text"],
   additionalInterfaces: [
-    { url: `http://localhost:${PORT}/a2a/jsonrpc`, transport: "JSONRPC" },
-    { url: `http://localhost:${PORT}/a2a/rest`, transport: "HTTP+JSON" },
+    { url: `${ADAPTER_PUBLIC_BASE_URL}/a2a/jsonrpc`, transport: "JSONRPC" },
+    { url: `${ADAPTER_PUBLIC_BASE_URL}/a2a/rest`, transport: "HTTP+JSON" },
   ],
 };
 
@@ -249,7 +250,7 @@ app.use("/a2a/rest", restHandler({ requestHandler: handler, userBuilder: async (
 
 const server = app.listen(PORT, HOST, () => {
   console.log(`ollama-a2a-adapter listening on ${HOST}:${PORT}`);
-  console.log(`ollama=${OLLAMA_BASE_URL} model=${OLLAMA_MODEL} node=${NODE_ID}`);
+  console.log(`public_base=${ADAPTER_PUBLIC_BASE_URL} ollama=${OLLAMA_BASE_URL} model=${OLLAMA_MODEL} node=${NODE_ID}`);
 });
 
 process.on("SIGINT", () => server.close(() => process.exit(0)));
