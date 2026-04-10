@@ -477,6 +477,18 @@ const plugin = {
       })
       .filter((v): v is string => v.length > 0);
 
+    const localMeshPeerToken = config.security.token
+      || (Array.isArray(config.security.tokens) ? (config.security.tokens[0] || "") : "")
+      || [...config.security.validTokens][0]
+      || "";
+    const localMeshPeer: PeerConfig = {
+      name: config.mesh.nodeId,
+      agentCardUrl: `http://127.0.0.1:${config.server.port}${normalizeCardPath()}`,
+      auth: config.security.inboundAuth === "bearer" && localMeshPeerToken
+        ? { type: "bearer", token: localMeshPeerToken }
+        : undefined,
+    };
+
     const meshManager = config.mesh.enabled
       ? new MeshNetworkManager({
           config: config.mesh,
@@ -484,6 +496,7 @@ const plugin = {
           localCapabilities: config.mesh.capabilities,
           client,
           getPeers: getEffectivePeers,
+          localPeer: localMeshPeer,
           logger: api.logger,
         })
       : null;

@@ -34,6 +34,7 @@ interface MeshNetworkManagerOptions {
   localCapabilities: MeshCapability[];
   client: A2AClient;
   getPeers: () => PeerConfig[];
+  localPeer?: PeerConfig;
   logger: LoggerLike;
 }
 
@@ -49,6 +50,7 @@ export class MeshNetworkManager implements MeshControlPlane {
   private readonly localCapabilities: MeshCapability[];
   private readonly client: A2AClient;
   private readonly getPeers: () => PeerConfig[];
+  private readonly localPeer?: PeerConfig;
   private readonly logger: LoggerLike;
   private readonly neighbors: MeshNeighborRegistry;
   private readonly tasks = new Map<string, MeshTaskRecord>();
@@ -63,6 +65,7 @@ export class MeshNetworkManager implements MeshControlPlane {
     this.localCapabilities = [...options.localCapabilities];
     this.client = options.client;
     this.getPeers = options.getPeers;
+    this.localPeer = options.localPeer;
     this.logger = options.logger;
     this.neighbors = new MeshNeighborRegistry({
       suspectThreshold: options.config.heartbeat.suspectThreshold,
@@ -367,18 +370,80 @@ export class MeshNetworkManager implements MeshControlPlane {
     const stageName = asString(envelope.payload.stageName) || "task-offer";
     const requiredSkills = normalizeStringArray(envelope.payload.requiredSkills as unknown[]);
 
-    const output = `[mesh:${this.config.nodeId}] accepted stage=${stageName}; goal="${truncate(goal, 220)}"; skills=${requiredSkills.join(", ") || this.localSkills.join(", ") || "general"}`;
+    const fallbackOutput = `[mesh:${this.config.nodeId}] accepted stage=${stageName}; goal="${truncate(goal, 220)}"; skills=${requiredSkills.join(", ") || this.localSkills.join(", ") || "general"}`;
     const accept = this.createFrame("TASK_ACCEPT", {
       acceptedBy: this.config.nodeId,
       stageName,
     }, envelope.meshTaskId, envelope.fromNodeId);
     this.applyTaskControlFrame(accept);
 
+    const execution = await this.executeTaskOfferLocally(goal, stageName, requiredSkills);
+    if (!execution.ok) {
+      this.logger.warn(`mesh.task-offer.local-exec.failed node=${this.config.nodeId} stage=${stageName} reason=${execution.error || "unknown"}`);
+    }
+
     return this.createFrame("TASK_RESULT", {
       stageName,
-      output,
+      output: execution.ok ? execution.output : fallbackOutput,
       acceptedBy: this.config.nodeId,
     }, envelope.meshTaskId, envelope.fromNodeId);
+  }
+
+  private async executeTaskOfferLocally(
+    goal: string,
+    stageName: string,
+    requiredSkills: string[],
+  ): Promise<RemoteStageResult> {
+    if (!this.localPeer) {
+      return {
+        ok: false,
+        output: "",
+        error: "local peer is not configured",
+      };
+    }
+
+    const skillText = requiredSkills.join(", ") || this.localSkills.join(", ") || "general";
+    const prompt = [
+      `You are mesh worker node "${this.config.nodeId}" (${this.config.runtimeType}).`,
+      `Stage: ${stageName}`,
+      `Task goal: ${goal}`,
+      `Required skills: ${skillText}`,
+      "Return only your stage result in plain text, concise and directly usable by the coordinator.",
+    ].join("\n");
+
+    try {
+      const result = await this.client.sendMessage(this.localPeer, {
+        role: "user",
+        parts: [{ kind: "text", text: prompt }],
+      });
+      if (!result.ok) {
+        return {
+          ok: false,
+          output: "",
+          error: extractError(result.response) || `local stage execution failed on ${this.localPeer.name}`,
+        };
+      }
+
+      const output = extractAnyText(result.response).trim();
+      if (!output) {
+        return {
+          ok: false,
+          output: "",
+          error: "local stage execution returned empty output",
+        };
+      }
+
+      return {
+        ok: true,
+        output,
+      };
+    } catch (error: unknown) {
+      return {
+        ok: false,
+        output: "",
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   private async handleDelegateRequest(envelope: MeshControlEnvelope): Promise<MeshControlEnvelope> {
