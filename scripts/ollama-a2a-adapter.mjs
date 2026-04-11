@@ -19,6 +19,9 @@ const ADAPTER_AGENT_CARD_URL = `${ADAPTER_PUBLIC_BASE_URL}${CARD_PATH}`;
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3.2";
 const NODE_ID = process.env.MESH_NODE_ID || `ollama-${os.hostname() || "node"}`;
+const COORDINATOR_AGENT_CARD_URL = String(process.env.MESH_COORDINATOR_AGENT_CARD_URL || "").trim();
+const COORDINATOR_TOKEN = String(process.env.MESH_COORDINATOR_TOKEN || process.env.MESH_TOKEN || "").trim();
+const SEED_PEERS_RAW = String(process.env.MESH_SEED_PEERS || "").trim();
 const SKILLS = String(process.env.OLLAMA_SKILLS || "chat,analysis,build,review")
   .split(",")
   .map((s) => s.trim())
@@ -96,6 +99,186 @@ function createFrame(type, fromNodeId, payload = {}, meshTaskId, toNodeId) {
   };
 }
 
+function parsePeerAuth(value) {
+  const obj = asObject(value);
+  if (!obj) return undefined;
+  const type = String(obj.type || "").trim();
+  const token = String(obj.token || "").trim();
+  if (!token) return undefined;
+  if (type !== "bearer" && type !== "apiKey") return undefined;
+  return { type, token };
+}
+
+function parseSeedPeers(raw) {
+  if (!raw) return [];
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+
+  const parsed = [];
+  const pushPeer = (candidate) => {
+    if (!candidate) return;
+    if (typeof candidate === "string") {
+      const agentCardUrl = candidate.trim();
+      if (agentCardUrl) parsed.push({ agentCardUrl });
+      return;
+    }
+    const obj = asObject(candidate);
+    if (!obj) return;
+    const agentCardUrl = String(obj.agentCardUrl || obj.url || "").trim();
+    if (!agentCardUrl) return;
+    const auth = parsePeerAuth(obj.auth);
+    const token = String(obj.token || "").trim();
+    if (auth) {
+      parsed.push({ agentCardUrl, auth });
+      return;
+    }
+    if (token) {
+      parsed.push({ agentCardUrl, auth: { type: "bearer", token } });
+      return;
+    }
+    parsed.push({ agentCardUrl });
+  };
+
+  if (trimmed.startsWith("[")) {
+    try {
+      const array = JSON.parse(trimmed);
+      if (Array.isArray(array)) {
+        for (const item of array) {
+          pushPeer(item);
+        }
+      }
+    } catch {
+      // ignore parse errors and fallback to comma-separated format
+    }
+  }
+
+  if (parsed.length === 0) {
+    for (const part of trimmed.split(",")) {
+      pushPeer(part);
+    }
+  }
+
+  const deduped = [];
+  const seen = new Set();
+  for (const peer of parsed) {
+    if (seen.has(peer.agentCardUrl)) continue;
+    seen.add(peer.agentCardUrl);
+    deduped.push(peer);
+  }
+  return deduped;
+}
+
+function resolveBootstrapPeers() {
+  const peers = parseSeedPeers(SEED_PEERS_RAW);
+  if (COORDINATOR_AGENT_CARD_URL) {
+    peers.unshift({
+      agentCardUrl: COORDINATOR_AGENT_CARD_URL,
+      ...(COORDINATOR_TOKEN ? { auth: { type: "bearer", token: COORDINATOR_TOKEN } } : {}),
+    });
+  }
+  const seen = new Set();
+  return peers.filter((peer) => {
+    if (!peer.agentCardUrl || seen.has(peer.agentCardUrl)) return false;
+    seen.add(peer.agentCardUrl);
+    return true;
+  });
+}
+
+function buildAuthHeaders(auth) {
+  if (!auth || !auth.token) return {};
+  if (auth.type === "apiKey") return { "x-api-key": auth.token };
+  return { authorization: `Bearer ${auth.token}` };
+}
+
+function buildAnnouncePayload() {
+  return {
+    runtimeType: "ollama-adapter",
+    skills: SKILLS,
+    agentCardUrl: ADAPTER_AGENT_CARD_URL,
+    capabilities: SKILLS.map((skill, idx) => ({
+      skillId: skill,
+      tags: [],
+      runtimeType: "ollama-adapter",
+      costHint: 1 + idx * 0.01,
+      latencyHint: 1.2,
+    })),
+  };
+}
+
+function resolveJsonRpcUrlFromCard(card, fallbackAgentCardUrl) {
+  const cardObj = asObject(card) || {};
+  const directUrl = String(cardObj.url || "").trim();
+  if (directUrl) return directUrl;
+  const interfaces = Array.isArray(cardObj.additionalInterfaces) ? cardObj.additionalInterfaces : [];
+  for (const item of interfaces) {
+    const iface = asObject(item);
+    if (!iface) continue;
+    const transport = String(iface.transport || "").toUpperCase();
+    const url = String(iface.url || "").trim();
+    if (url && transport.includes("JSONRPC")) return url;
+  }
+  try {
+    return `${new URL(fallbackAgentCardUrl).origin}/a2a/jsonrpc`;
+  } catch {
+    return "";
+  }
+}
+
+async function announceToPeer(peer) {
+  const authHeaders = buildAuthHeaders(peer.auth);
+  const cardRes = await fetch(peer.agentCardUrl, { headers: authHeaders });
+  if (!cardRes.ok) {
+    throw new Error(`fetch card failed ${cardRes.status}`);
+  }
+  const card = await cardRes.json();
+  const rpcUrl = resolveJsonRpcUrlFromCard(card, peer.agentCardUrl);
+  if (!rpcUrl) {
+    throw new Error("unable to resolve peer JSON-RPC url");
+  }
+
+  const announce = createFrame("ANNOUNCE", NODE_ID, buildAnnouncePayload());
+  const body = {
+    jsonrpc: "2.0",
+    id: crypto.randomUUID(),
+    method: "message/send",
+    params: {
+      message: {
+        kind: "message",
+        messageId: crypto.randomUUID(),
+        role: "user",
+        parts: [{ kind: "data", mimeType: MESH_CONTROL_MIME, data: announce }],
+      },
+    },
+  };
+
+  const sendRes = await fetch(rpcUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...authHeaders,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!sendRes.ok) {
+    const text = await sendRes.text();
+    throw new Error(`announce failed ${sendRes.status}: ${text}`);
+  }
+}
+
+async function bootstrapAnnounce() {
+  const peers = resolveBootstrapPeers();
+  if (peers.length === 0) return;
+  for (const peer of peers) {
+    try {
+      await announceToPeer(peer);
+      console.log(`[mesh] announce sent -> ${peer.agentCardUrl}`);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(`[mesh] announce failed -> ${peer.agentCardUrl}: ${reason}`);
+    }
+  }
+}
+
 async function runOllama(prompt) {
   const res = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
     method: "POST",
@@ -134,18 +317,7 @@ class OllamaExecutor {
         return;
       }
       if (envelope.type === "ANNOUNCE") {
-        const announce = createFrame("ANNOUNCE", NODE_ID, {
-          runtimeType: "ollama-adapter",
-          skills: SKILLS,
-          agentCardUrl: ADAPTER_AGENT_CARD_URL,
-          capabilities: SKILLS.map((skill, idx) => ({
-            skillId: skill,
-            tags: [],
-            runtimeType: "ollama-adapter",
-            costHint: 1 + idx * 0.01,
-            latencyHint: 1.2,
-          })),
-        }, envelope.meshTaskId, envelope.fromNodeId);
+        const announce = createFrame("ANNOUNCE", NODE_ID, buildAnnouncePayload(), envelope.meshTaskId, envelope.fromNodeId);
         this.reply(taskId, contextId, history, eventBus, [{ kind: "data", mimeType: MESH_CONTROL_MIME, data: announce }]);
         return;
       }
@@ -253,6 +425,7 @@ app.use("/a2a/rest", restHandler({ requestHandler: handler, userBuilder: async (
 const server = app.listen(PORT, HOST, () => {
   console.log(`ollama-a2a-adapter listening on ${HOST}:${PORT}`);
   console.log(`public_base=${ADAPTER_PUBLIC_BASE_URL} ollama=${OLLAMA_BASE_URL} model=${OLLAMA_MODEL} node=${NODE_ID}`);
+  void bootstrapAnnounce();
 });
 
 process.on("SIGINT", () => server.close(() => process.exit(0)));

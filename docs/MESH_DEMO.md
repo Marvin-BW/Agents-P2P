@@ -84,7 +84,8 @@ You can keep peer definitions in a JSON file and let gateway hot-reload it:
 
 When `peerRegistry` is enabled on the coordinator:
 
-- OpenClaw/Ollama nodes send `ANNOUNCE` on startup.
+- OpenClaw nodes send `ANNOUNCE` on startup.
+- Ollama adapter sends `ANNOUNCE` on startup when `MESH_COORDINATOR_AGENT_CARD_URL` or `MESH_SEED_PEERS` is configured.
 - If `ANNOUNCE.payload.agentCardUrl` is present, coordinator auto-upserts that node into `peers` and `seedPeers`.
 - Coordinator persists updates back to `mesh-peers.json` without restart.
 
@@ -147,7 +148,13 @@ Environment variables:
 
 - `ADAPTER_HOST` (default `0.0.0.0`)
 - `ADAPTER_PORT` (default `18900`)
+- `ADAPTER_PUBLIC_BASE_URL` (adapter public base used in Agent Card and ANNOUNCE payload)
 - `OLLAMA_BASE_URL` (default `http://127.0.0.1:11434`)
 - `OLLAMA_MODEL` (default `llama3.2`)
 - `MESH_NODE_ID` (default `ollama-<hostname>`)
 - `OLLAMA_SKILLS` (comma-separated, default `chat,analysis,build,review`)
+- `MESH_COORDINATOR_AGENT_CARD_URL` (single coordinator card URL for startup ANNOUNCE)
+- `MESH_COORDINATOR_TOKEN` (optional bearer token for coordinator)
+- `MESH_SEED_PEERS` (optional JSON array or comma-separated Agent Card URLs for startup ANNOUNCE)
+
+When `MESH_COORDINATOR_AGENT_CARD_URL` or `MESH_SEED_PEERS` is configured, adapter sends ANNOUNCE to those peers on startup.
