@@ -14,6 +14,8 @@ const MESH_CONTROL_MIME = "application/vnd.a2a.mesh+json";
 const HOST = process.env.ADAPTER_HOST || "0.0.0.0";
 const PORT = Number(process.env.ADAPTER_PORT || 18900);
 const ADAPTER_PUBLIC_BASE_URL = process.env.ADAPTER_PUBLIC_BASE_URL || `http://127.0.0.1:${PORT}`;
+const CARD_PATH = AGENT_CARD_PATH.startsWith("/") ? AGENT_CARD_PATH : `/${AGENT_CARD_PATH}`;
+const ADAPTER_AGENT_CARD_URL = `${ADAPTER_PUBLIC_BASE_URL}${CARD_PATH}`;
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3.2";
 const NODE_ID = process.env.MESH_NODE_ID || `ollama-${os.hostname() || "node"}`;
@@ -135,6 +137,7 @@ class OllamaExecutor {
         const announce = createFrame("ANNOUNCE", NODE_ID, {
           runtimeType: "ollama-adapter",
           skills: SKILLS,
+          agentCardUrl: ADAPTER_AGENT_CARD_URL,
           capabilities: SKILLS.map((skill, idx) => ({
             skillId: skill,
             tags: [],
@@ -209,7 +212,6 @@ class OllamaExecutor {
   }
 }
 
-const cardPath = AGENT_CARD_PATH.startsWith("/") ? AGENT_CARD_PATH : `/${AGENT_CARD_PATH}`;
 const agentCard = {
   protocolVersion: "0.3.0",
   version: "0.1.0",
@@ -241,8 +243,8 @@ const agentCard = {
 const handler = new DefaultRequestHandler(agentCard, new InMemoryTaskStore(), new OllamaExecutor());
 const app = express();
 
-app.use(cardPath, agentCardHandler({ agentCardProvider: handler }));
-if (cardPath !== "/.well-known/agent.json") {
+app.use(CARD_PATH, agentCardHandler({ agentCardProvider: handler }));
+if (CARD_PATH !== "/.well-known/agent.json") {
   app.use("/.well-known/agent.json", agentCardHandler({ agentCardProvider: handler }));
 }
 app.use("/a2a/jsonrpc", jsonRpcHandler({ requestHandler: handler, userBuilder: async () => UserBuilder.noAuthentication() }));

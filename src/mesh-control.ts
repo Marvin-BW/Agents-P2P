@@ -21,6 +21,7 @@ import {
   type MeshTopology,
 } from "./mesh-types.js";
 import type { PeerConfig } from "./types.js";
+import type { PeerAuthConfig } from "./types.js";
 
 type LoggerLike = {
   info: (msg: string) => void;
@@ -35,6 +36,8 @@ interface MeshNetworkManagerOptions {
   client: A2AClient;
   getPeers: () => PeerConfig[];
   localPeer?: PeerConfig;
+  publicPeer?: PeerConfig;
+  onPeerAnnounce?: (peer: PeerConfig & { runtimeType: "openclaw" | "ollama-adapter"; skills: string[] }) => void | Promise<void>;
   logger: LoggerLike;
 }
 
@@ -51,6 +54,8 @@ export class MeshNetworkManager implements MeshControlPlane {
   private readonly client: A2AClient;
   private readonly getPeers: () => PeerConfig[];
   private readonly localPeer?: PeerConfig;
+  private readonly publicPeer?: PeerConfig;
+  private readonly onPeerAnnounce?: (peer: PeerConfig & { runtimeType: "openclaw" | "ollama-adapter"; skills: string[] }) => void | Promise<void>;
   private readonly logger: LoggerLike;
   private readonly neighbors: MeshNeighborRegistry;
   private readonly tasks = new Map<string, MeshTaskRecord>();
@@ -66,6 +71,8 @@ export class MeshNetworkManager implements MeshControlPlane {
     this.client = options.client;
     this.getPeers = options.getPeers;
     this.localPeer = options.localPeer;
+    this.publicPeer = options.publicPeer;
+    this.onPeerAnnounce = options.onPeerAnnounce;
     this.logger = options.logger;
     this.neighbors = new MeshNeighborRegistry({
       suspectThreshold: options.config.heartbeat.suspectThreshold,
@@ -592,6 +599,8 @@ export class MeshNetworkManager implements MeshControlPlane {
     const runtimeType = normalizeRuntimeType(asString(payload.runtimeType));
     const skills = normalizeStringArray(payload.skills as unknown[]);
     const capabilities = normalizeCapabilities(payload.capabilities as unknown[], runtimeType);
+    const announcedAgentCardUrl = asString(payload.agentCardUrl).trim();
+    const announcedAuth = parsePeerAuth(payload.auth);
     const node = this.neighbors.upsertOnline({
       nodeId: envelope.fromNodeId,
       runtimeType,
@@ -607,6 +616,20 @@ export class MeshNetworkManager implements MeshControlPlane {
         this.nodeIdToPeerName.set(node.nodeId, peer.name);
         this.peerNameToNodeId.set(peer.name, node.nodeId);
       }
+    }
+
+    if (announcedAgentCardUrl && this.onPeerAnnounce) {
+      const announcedPeer: PeerConfig & { runtimeType: "openclaw" | "ollama-adapter"; skills: string[] } = {
+        name: envelope.fromNodeId,
+        agentCardUrl: announcedAgentCardUrl,
+        ...(announcedAuth ? { auth: announcedAuth } : {}),
+        runtimeType,
+        skills,
+      };
+      void Promise.resolve(this.onPeerAnnounce(announcedPeer)).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`mesh.peer-announce.callback.failed node=${envelope.fromNodeId} reason=${message}`);
+      });
     }
   }
 
@@ -668,6 +691,8 @@ export class MeshNetworkManager implements MeshControlPlane {
       runtimeType: this.config.runtimeType,
       skills: this.localSkills,
       capabilities: this.localCapabilities,
+      agentCardUrl: this.publicPeer?.agentCardUrl || "",
+      auth: this.publicPeer?.auth || undefined,
     }, undefined, toNodeId);
   }
 
@@ -1067,6 +1092,15 @@ function normalizeStringArray(value: unknown): string[] {
     result.push(trimmed);
   }
   return result;
+}
+
+function parsePeerAuth(value: unknown): PeerAuthConfig | undefined {
+  if (!isRecord(value)) return undefined;
+  const type = asString(value.type).trim();
+  const token = asString(value.token).trim();
+  if (!token) return undefined;
+  if (type !== "bearer" && type !== "apiKey") return undefined;
+  return { type, token };
 }
 
 function extractError(value: unknown): string {

@@ -30,6 +30,11 @@ const localPeer: PeerConfig = {
   agentCardUrl: "http://127.0.0.1:18800/.well-known/agent.json",
 };
 
+const publicPeer: PeerConfig = {
+  name: "node-worker-32",
+  agentCardUrl: "http://100.114.24.56:18800/.well-known/agent.json",
+};
+
 describe("MeshNetworkManager TASK_OFFER handling", () => {
   it("returns real local execution output when local peer execution succeeds", async () => {
     const client = {
@@ -137,5 +142,89 @@ describe("MeshNetworkManager TASK_OFFER handling", () => {
     assert.ok(output.includes("accepted stage=cross-review"), `unexpected fallback output: ${output}`);
     assert.ok(output.includes("mode=fallback"), `missing fallback mode marker in output: ${output}`);
     assert.ok(output.includes("fallback=\""), `missing fallback reason in output: ${output}`);
+  });
+});
+
+describe("MeshNetworkManager ANNOUNCE handling", () => {
+  it("includes public agent card url in ANNOUNCE response payload", async () => {
+    const manager = new MeshNetworkManager({
+      config: meshConfig,
+      localSkills: ["analysis", "review"],
+      localCapabilities: meshConfig.capabilities,
+      client: { async sendMessage() { return { ok: true, statusCode: 200, response: {} }; } } as any,
+      getPeers: () => [],
+      localPeer,
+      publicPeer,
+      logger: silentLogger,
+    });
+
+    const handled = await manager.handleInboundControlMessage({
+      kind: "message",
+      parts: [{
+        kind: "data",
+        mimeType: MESH_CONTROL_MIME,
+        data: {
+          meshProtocolVersion: MESH_PROTOCOL_VERSION,
+          type: "ANNOUNCE",
+          fromNodeId: "node-coordinator-cloud",
+          timestamp: new Date().toISOString(),
+          payload: { runtimeType: "openclaw", skills: ["analysis"] },
+        },
+      }],
+    });
+
+    assert.equal(handled.handled, true);
+    const responseEnvelope = (handled.responseParts?.[0] as any).data as Record<string, unknown>;
+    assert.equal(responseEnvelope.type, "ANNOUNCE");
+    const payload = responseEnvelope.payload as Record<string, unknown>;
+    assert.equal(payload.agentCardUrl, publicPeer.agentCardUrl);
+  });
+
+  it("emits onPeerAnnounce callback when announce includes agentCardUrl", async () => {
+    const announced: Array<{ name: string; agentCardUrl: string; runtimeType: string }> = [];
+    const manager = new MeshNetworkManager({
+      config: meshConfig,
+      localSkills: ["analysis", "review"],
+      localCapabilities: meshConfig.capabilities,
+      client: { async sendMessage() { return { ok: true, statusCode: 200, response: {} }; } } as any,
+      getPeers: () => [],
+      localPeer,
+      publicPeer,
+      onPeerAnnounce: (peer) => {
+        announced.push({
+          name: peer.name,
+          agentCardUrl: peer.agentCardUrl,
+          runtimeType: peer.runtimeType,
+        });
+      },
+      logger: silentLogger,
+    });
+
+    await manager.handleInboundControlMessage({
+      kind: "message",
+      parts: [{
+        kind: "data",
+        mimeType: MESH_CONTROL_MIME,
+        data: {
+          meshProtocolVersion: MESH_PROTOCOL_VERSION,
+          type: "ANNOUNCE",
+          fromNodeId: "node-ollama-win",
+          timestamp: new Date().toISOString(),
+          payload: {
+            runtimeType: "ollama-adapter",
+            skills: ["analysis", "review"],
+            agentCardUrl: "http://100.98.187.62:18900/.well-known/agent.json",
+          },
+        },
+      }],
+    });
+
+    // callback is fire-and-forget; allow microtask queue to flush once.
+    await Promise.resolve();
+
+    assert.equal(announced.length, 1);
+    assert.equal(announced[0].name, "node-ollama-win");
+    assert.equal(announced[0].runtimeType, "ollama-adapter");
+    assert.equal(announced[0].agentCardUrl, "http://100.98.187.62:18900/.well-known/agent.json");
   });
 });

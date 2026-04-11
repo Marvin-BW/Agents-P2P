@@ -82,6 +82,14 @@ You can keep peer definitions in a JSON file and let gateway hot-reload it:
 }
 ```
 
+When `peerRegistry` is enabled on the coordinator:
+
+- OpenClaw/Ollama nodes send `ANNOUNCE` on startup.
+- If `ANNOUNCE.payload.agentCardUrl` is present, coordinator auto-upserts that node into `peers` and `seedPeers`.
+- Coordinator persists updates back to `mesh-peers.json` without restart.
+
+For OpenClaw nodes, set `agentCard.url` to a reachable address (for example Tailscale IP), otherwise auto-registered URLs may fall back to localhost.
+
 ## Gateway Methods
 
 - `mesh.node.start`

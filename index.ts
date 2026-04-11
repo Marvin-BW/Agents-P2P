@@ -8,7 +8,7 @@
 
 import type { Server } from "node:http";
 import { readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -559,6 +559,17 @@ const plugin = {
         ? { type: "bearer", token: localMeshPeerToken }
         : undefined,
     };
+    const publicMeshPeer: PeerConfig = {
+      name: config.mesh.nodeId,
+      agentCardUrl: (() => {
+        try {
+          return `${new URL(agentCard.url).origin}${normalizeCardPath()}`;
+        } catch {
+          return localMeshPeer.agentCardUrl;
+        }
+      })(),
+      auth: localMeshPeer.auth,
+    };
 
     const meshManager = config.mesh.enabled
       ? new MeshNetworkManager({
@@ -568,6 +579,10 @@ const plugin = {
           client,
           getPeers: getEffectivePeers,
           localPeer: localMeshPeer,
+          publicPeer: publicMeshPeer,
+          onPeerAnnounce: async (announcedPeer) => {
+            await upsertAnnouncedPeer(announcedPeer);
+          },
           logger: api.logger,
         })
       : null;
@@ -585,6 +600,7 @@ const plugin = {
 
     let peerRegistryTimer: ReturnType<typeof setInterval> | null = null;
     let peerRegistrySignature = "";
+    let peerRegistryWriteChain: Promise<void> = Promise.resolve();
 
     const computePeerRegistrySignature = (snapshot: { peers: PeerConfig[]; seedPeers: PeerConfig[] }): string => {
       return JSON.stringify({
@@ -606,6 +622,65 @@ const plugin = {
         const message = error instanceof Error ? error.message : String(error);
         api.logger.warn(`a2a-gateway: peer registry reload failed "${config.peerRegistry.filePath}": ${message}`);
       }
+    };
+
+    const persistPeerRegistry = async (): Promise<void> => {
+      if (!config.peerRegistry?.filePath) return;
+      const snapshot = {
+        peers: dedupePeersByName(config.peers),
+        seedPeers: dedupePeersByName(config.mesh.seedPeers),
+      };
+      const nextText = `${JSON.stringify(snapshot, null, 2)}\n`;
+      await mkdir(path.dirname(config.peerRegistry.filePath), { recursive: true });
+      await writeFile(config.peerRegistry.filePath, nextText, "utf8");
+      peerRegistrySignature = computePeerRegistrySignature(snapshot);
+    };
+
+    const queuePersistPeerRegistry = (): void => {
+      if (!config.peerRegistry?.filePath) return;
+      peerRegistryWriteChain = peerRegistryWriteChain
+        .then(async () => {
+          await persistPeerRegistry();
+        })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          api.logger.warn(`a2a-gateway: peer registry persist failed "${config.peerRegistry?.filePath}": ${message}`);
+        });
+    };
+
+    const upsertAnnouncedPeer = async (
+      peer: PeerConfig & { runtimeType: "openclaw" | "ollama-adapter"; skills: string[] },
+    ): Promise<void> => {
+      if (!peer.name || !peer.agentCardUrl) return;
+      if (peer.name === config.mesh.nodeId) return;
+
+      const current = config.peers.find((p) => p.name === peer.name);
+      const currentSeed = config.mesh.seedPeers.find((p) => p.name === peer.name);
+      const samePeer = current
+        && current.agentCardUrl === peer.agentCardUrl
+        && (current.auth?.type || "") === (peer.auth?.type || "")
+        && (current.auth?.token || "") === (peer.auth?.token || "");
+      const sameSeed = currentSeed
+        && currentSeed.agentCardUrl === peer.agentCardUrl
+        && (currentSeed.auth?.type || "") === (peer.auth?.type || "")
+        && (currentSeed.auth?.token || "") === (peer.auth?.token || "");
+      if (samePeer && sameSeed) return;
+
+      const normalizedPeer: PeerConfig = {
+        name: peer.name,
+        agentCardUrl: peer.agentCardUrl,
+        ...(peer.auth ? { auth: peer.auth } : {}),
+      };
+      config.peers = dedupePeersByName([
+        ...config.peers.filter((p) => p.name !== normalizedPeer.name),
+        normalizedPeer,
+      ]);
+      config.mesh.seedPeers = dedupePeersByName([
+        ...config.mesh.seedPeers.filter((p) => p.name !== normalizedPeer.name),
+        normalizedPeer,
+      ]);
+      api.logger.info(`a2a-gateway: peer auto-registered name=${normalizedPeer.name} url=${normalizedPeer.agentCardUrl}`);
+      queuePersistPeerRegistry();
     };
 
     peerRegistrySignature = computePeerRegistrySignature({
