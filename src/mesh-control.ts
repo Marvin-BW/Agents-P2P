@@ -265,12 +265,20 @@ export class MeshNetworkManager implements MeshControlPlane {
         for (const nodeId of stage.assignedNodeIds) {
           stage.attempts = Math.max(stage.attempts, 1);
           const result = await this.executeStageOnNode(task, stage.stageId, stage.name, nodeId);
-          stage.results.push({ nodeId, ok: result.ok, output: result.output });
+          stage.results.push({
+            nodeId,
+            ok: result.ok,
+            output: result.output || (result.ok ? "" : `[mesh-error] ${truncate(result.error || "stage execution failed", 240)}`),
+          });
           if (!result.ok) {
             stage.attempts += 1;
             const failover = await this.tryOneRetry(task, stage.stageId, stage.name, nodeId);
             if (failover) {
-              stage.results.push({ nodeId: failover.nodeId, ok: failover.ok, output: failover.output });
+              stage.results.push({
+                nodeId: failover.nodeId,
+                ok: failover.ok,
+                output: failover.output || (failover.ok ? "" : `[mesh-error] ${truncate(failover.error || "stage execution failed", 240)}`),
+              });
               if (!failover.ok) {
                 throw new Error(failover.error || failover.output || "stage execution failed");
               }
@@ -709,10 +717,11 @@ export class MeshNetworkManager implements MeshControlPlane {
       if (responseEnvelope) {
         this.rememberPeerMapping(peer.name, responseEnvelope.fromNodeId);
         if (responseEnvelope.type === "TASK_FAIL") {
+          const reason = asString(responseEnvelope.payload.reason) || "remote task failed";
           return {
             ok: false,
             output: "",
-            error: asString(responseEnvelope.payload.reason) || "remote task failed",
+            error: reason,
           };
         }
         if (responseEnvelope.type === "PONG") {
