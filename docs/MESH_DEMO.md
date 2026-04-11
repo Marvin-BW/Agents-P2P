@@ -44,6 +44,44 @@ Add under plugin config:
 }
 ```
 
+### Optional: External Peer Registry (No Restart for Node Add/Remove)
+
+You can keep peer definitions in a JSON file and let gateway hot-reload it:
+
+```json
+{
+  "peerRegistry": {
+    "filePath": "./data/mesh-peers.json",
+    "pollIntervalMs": 5000
+  }
+}
+```
+
+`mesh-peers.json` supports either:
+
+1) Array format (used for both `peers` and `mesh.seedPeers`)
+
+```json
+[
+  { "name": "node-coordinator-cloud", "agentCardUrl": "http://100.91.248.6:18800/.well-known/agent.json" },
+  { "name": "node-worker-32", "agentCardUrl": "http://100.114.24.56:18800/.well-known/agent.json" },
+  { "name": "node-ollama-win", "agentCardUrl": "http://100.98.187.62:18900/.well-known/agent.json" }
+]
+```
+
+2) Object format (separate `peers` and `seedPeers`)
+
+```json
+{
+  "peers": [
+    { "name": "node-coordinator-cloud", "agentCardUrl": "http://100.91.248.6:18800/.well-known/agent.json" }
+  ],
+  "seedPeers": [
+    { "name": "node-coordinator-cloud", "agentCardUrl": "http://100.91.248.6:18800/.well-known/agent.json" }
+  ]
+}
+```
+
 ## Gateway Methods
 
 - `mesh.node.start`

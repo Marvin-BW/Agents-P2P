@@ -82,6 +82,13 @@ export interface DnsDiscoveryConfig {
   mergeWithStatic: boolean;
 }
 
+export interface PeerRegistryConfig {
+  /** Absolute or workspace-relative JSON file path. */
+  filePath: string;
+  /** Poll interval for reloading node definitions (ms). */
+  pollIntervalMs: number;
+}
+
 export interface GatewayConfig {
   agentCard: AgentCardConfig;
   server: {
@@ -94,6 +101,8 @@ export interface GatewayConfig {
     cleanupIntervalMinutes: number;
   };
   peers: PeerConfig[];
+  /** Optional external peer registry file (hot-reloaded at runtime). */
+  peerRegistry?: PeerRegistryConfig;
   security: SecurityConfig;
   routing: {
     defaultAgentId: string;

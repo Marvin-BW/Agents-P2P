@@ -7,6 +7,8 @@
  */
 
 import type { Server } from "node:http";
+import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -168,6 +170,45 @@ function parsePeers(raw: unknown): PeerConfig[] {
   return peers;
 }
 
+function dedupePeersByName(peers: PeerConfig[]): PeerConfig[] {
+  const byName = new Map<string, PeerConfig>();
+  for (const peer of peers) {
+    if (!peer.name || !peer.agentCardUrl) continue;
+    byName.set(peer.name, peer);
+  }
+  return [...byName.values()];
+}
+
+function parsePeerRegistryPayload(raw: unknown): { peers: PeerConfig[]; seedPeers: PeerConfig[] } {
+  if (Array.isArray(raw)) {
+    const peers = dedupePeersByName(parsePeers(raw));
+    return { peers, seedPeers: peers };
+  }
+
+  const value = asObject(raw);
+  const peersRaw = Array.isArray(value.peers)
+    ? value.peers
+    : Array.isArray(value.nodes)
+      ? value.nodes
+      : [];
+  const seedPeersRaw = Array.isArray(value.seedPeers)
+    ? value.seedPeers
+    : Array.isArray(value.meshSeedPeers)
+      ? value.meshSeedPeers
+      : undefined;
+
+  const peers = dedupePeersByName(parsePeers(peersRaw));
+  const seedPeers = seedPeersRaw !== undefined
+    ? dedupePeersByName(parsePeers(seedPeersRaw))
+    : peers;
+
+  if (peers.length === 0 && seedPeers.length === 0) {
+    throw new Error("peer registry file is empty or invalid");
+  }
+
+  return { peers, seedPeers };
+}
+
 function parseMeshRuntimeType(raw: unknown): MeshRuntimeType {
   return raw === "ollama-adapter" ? "ollama-adapter" : "openclaw";
 }
@@ -246,6 +287,7 @@ export function parseConfig(raw: unknown, resolvePath?: (nextPath: string) => st
   const retry = asObject(resilience.retry);
   const circuitBreaker = asObject(resilience.circuitBreaker);
   const discoveryRaw = config.discovery ? asObject(config.discovery) : undefined;
+  const peerRegistryRaw = config.peerRegistry ? asObject(config.peerRegistry) : {};
 
   const inboundAuth = asString(security.inboundAuth, "none") as InboundAuth;
 
@@ -263,6 +305,11 @@ export function parseConfig(raw: unknown, resolvePath?: (nextPath: string) => st
   const meshRuntimeType = parseMeshRuntimeType(mesh.runtimeType);
   const meshSeedPeers = parsePeers(mesh.seedPeers);
   const meshCapabilities = parseMeshCapabilities(mesh.capabilities, parsedAgentCard.skills, meshRuntimeType);
+  const peerRegistryFilePathRaw = asString(peerRegistryRaw.filePath || config.peerRegistryFile, "").trim();
+  const peerRegistryFilePath = peerRegistryFilePathRaw
+    ? resolveConfiguredPath(peerRegistryFilePathRaw, peerRegistryFilePathRaw, resolvePath)
+    : "";
+  const peerRegistryPollIntervalMs = Math.max(1000, asNumber(peerRegistryRaw.pollIntervalMs, 5000));
 
   return {
     agentCard: parsedAgentCard,
@@ -280,6 +327,12 @@ export function parseConfig(raw: unknown, resolvePath?: (nextPath: string) => st
       cleanupIntervalMinutes: Math.max(1, asNumber(storage.cleanupIntervalMinutes, 60)),
     },
     peers: parsePeers(config.peers),
+    peerRegistry: peerRegistryFilePath
+      ? {
+          filePath: peerRegistryFilePath,
+          pollIntervalMs: peerRegistryPollIntervalMs,
+        }
+      : undefined,
     security: (() => {
       const singleToken = asString(security.token, "");
       const tokenArray = Array.isArray(security.tokens)
@@ -383,6 +436,24 @@ const plugin = {
 
   register(api: OpenClawPluginApi) {
     const config = parseConfig(api.pluginConfig, api.resolvePath?.bind(api));
+
+    const applyPeerRegistrySnapshot = (snapshot: { peers: PeerConfig[]; seedPeers: PeerConfig[] }, source: string) => {
+      config.peers = dedupePeersByName(snapshot.peers);
+      config.mesh.seedPeers = dedupePeersByName(snapshot.seedPeers);
+      api.logger.info(`a2a-gateway: peer registry applied from ${source}; peers=${config.peers.length} seedPeers=${config.mesh.seedPeers.length}`);
+    };
+
+    if (config.peerRegistry?.filePath) {
+      try {
+        const text = readFileSync(config.peerRegistry.filePath, "utf8");
+        const parsed = parsePeerRegistryPayload(JSON.parse(text));
+        applyPeerRegistrySnapshot(parsed, config.peerRegistry.filePath);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        api.logger.warn(`a2a-gateway: failed to load peer registry "${config.peerRegistry.filePath}": ${message}`);
+      }
+    }
+
     const telemetry = new GatewayTelemetry(api.logger, {
       structuredLogs: config.observability.structuredLogs,
     });
@@ -511,6 +582,36 @@ const plugin = {
     const findPeer = (name: string): PeerConfig | undefined => {
       return getEffectivePeers().find((p) => p.name === name);
     };
+
+    let peerRegistryTimer: ReturnType<typeof setInterval> | null = null;
+    let peerRegistrySignature = "";
+
+    const computePeerRegistrySignature = (snapshot: { peers: PeerConfig[]; seedPeers: PeerConfig[] }): string => {
+      return JSON.stringify({
+        peers: snapshot.peers.map((p) => `${p.name}|${p.agentCardUrl}|${p.auth?.type || ""}|${p.auth?.token || ""}`),
+        seedPeers: snapshot.seedPeers.map((p) => `${p.name}|${p.agentCardUrl}|${p.auth?.type || ""}|${p.auth?.token || ""}`),
+      });
+    };
+
+    const reloadPeerRegistry = async (): Promise<void> => {
+      if (!config.peerRegistry?.filePath) return;
+      try {
+        const text = await readFile(config.peerRegistry.filePath, "utf8");
+        const parsed = parsePeerRegistryPayload(JSON.parse(text));
+        const signature = computePeerRegistrySignature(parsed);
+        if (signature === peerRegistrySignature) return;
+        applyPeerRegistrySnapshot(parsed, config.peerRegistry.filePath);
+        peerRegistrySignature = signature;
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        api.logger.warn(`a2a-gateway: peer registry reload failed "${config.peerRegistry.filePath}": ${message}`);
+      }
+    };
+
+    peerRegistrySignature = computePeerRegistrySignature({
+      peers: config.peers,
+      seedPeers: config.mesh.seedPeers,
+    });
 
     // Wire peer state into telemetry snapshot
     if (healthManager) {
@@ -1181,6 +1282,15 @@ const plugin = {
         // Start mDNS self-advertisement (after HTTP is listening)
         mdnsResponder?.start();
 
+        // Hot-reload peer/seed lists from external JSON file (optional).
+        if (config.peerRegistry?.filePath) {
+          await reloadPeerRegistry();
+          peerRegistryTimer = setInterval(() => {
+            void reloadPeerRegistry();
+          }, config.peerRegistry.pollIntervalMs);
+          api.logger.info(`a2a-gateway: peer registry watcher enabled file=${config.peerRegistry.filePath} intervalMs=${config.peerRegistry.pollIntervalMs}`);
+        }
+
         // Start mesh heartbeat/control plane after server is reachable.
         if (meshManager) {
           await meshManager.start();
@@ -1188,6 +1298,11 @@ const plugin = {
         }
       },
       async stop(_ctx) {
+        if (peerRegistryTimer) {
+          clearInterval(peerRegistryTimer);
+          peerRegistryTimer = null;
+        }
+
         meshManager?.stop();
 
         // Stop mDNS self-advertisement (sends goodbye packet)
