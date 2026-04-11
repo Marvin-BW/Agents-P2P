@@ -7,7 +7,7 @@
  *   node scripts/mesh-cli.mjs node start
  *   node scripts/mesh-cli.mjs node status
  *   node scripts/mesh-cli.mjs neighbors list
- *   node scripts/mesh-cli.mjs task submit --goal "Review this design" --template auto --required-skills review,architecture
+ *   node scripts/mesh-cli.mjs task submit --goal "Review this design" --template auto --required-skills review,architecture --nodes node-worker-32,node-ollama-win
  *   node scripts/mesh-cli.mjs task status <meshTaskId>
  */
 
@@ -20,7 +20,7 @@ Usage:
   mesh-cli node start [--base-url <url>] [--token <token>]
   mesh-cli node status [--base-url <url>] [--token <token>]
   mesh-cli neighbors list [--base-url <url>] [--token <token>]
-  mesh-cli task submit --goal <text> [--template auto|analyze|build|review] [--required-skills a,b,c] [--base-url <url>] [--token <token>]
+  mesh-cli task submit --goal <text> [--template auto|analyze|build|review] [--required-skills a,b,c] [--nodes n1,n2] [--base-url <url>] [--token <token>]
   mesh-cli task status <meshTaskId> [--base-url <url>] [--token <token>]
 
 Env:
@@ -133,10 +133,16 @@ async function main() {
       .map((s) => s.trim())
       .filter(Boolean);
 
+    const targetNodes = String(options.nodes || options["target-nodes"] || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
     const result = await request("POST", `${baseUrl}/a2a/mesh/task/submit`, {
       goal,
       template,
       ...(requiredSkills.length > 0 ? { requiredSkills } : {}),
+      ...(targetNodes.length > 0 ? { targetNodes } : {}),
     }, token);
     console.log(JSON.stringify(result, null, 2));
     const meshTaskId = typeof result?.meshTaskId === "string" ? result.meshTaskId : "";
@@ -163,4 +169,3 @@ main().catch((error) => {
   console.error(error?.message || String(error));
   process.exit(1);
 });
-

@@ -111,6 +111,7 @@ export interface MeshTaskSubmitInput {
   goal: string;
   requiredSkills?: string[];
   template?: MeshTemplateOrAuto;
+  targetNodes?: string[];
 }
 
 export interface MeshTaskSubmitResult {

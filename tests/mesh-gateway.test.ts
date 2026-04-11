@@ -41,5 +41,23 @@ describe("mesh gateway methods", () => {
     const task = taskStatus.data as Record<string, unknown>;
     assert.equal(task.meshTaskId, submitData.meshTaskId);
     assert.equal(Array.isArray(task.stages), true);
+
+    const targeted = await invokeGatewayMethod(harness, "mesh.task.submit", {
+      goal: "Analyze latest logs and summarize findings",
+      template: "auto",
+      targetNodes: ["node-local"],
+    });
+    assert.equal(targeted.ok, true);
+    const targetedData = targeted.data as Record<string, unknown>;
+    assert.deepEqual(targetedData.selectedNodes, ["node-local"]);
+
+    const unavailable = await invokeGatewayMethod(harness, "mesh.task.submit", {
+      goal: "Analyze latest logs and summarize findings",
+      template: "auto",
+      targetNodes: ["node-not-exist"],
+    });
+    assert.equal(unavailable.ok, false);
+    const unavailableData = unavailable.data as Record<string, unknown>;
+    assert.match(String(unavailableData.error || ""), /target nodes unavailable or offline/i);
   });
 });

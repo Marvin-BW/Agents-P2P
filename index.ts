@@ -724,6 +724,11 @@ const plugin = {
           requiredSkills: Array.isArray(payload.requiredSkills)
             ? payload.requiredSkills.filter((s): s is string => typeof s === "string")
             : undefined,
+          targetNodes: Array.isArray(payload.targetNodes)
+            ? payload.targetNodes.filter((s): s is string => typeof s === "string")
+            : Array.isArray(payload.selectedNodes)
+              ? payload.selectedNodes.filter((s): s is string => typeof s === "string")
+              : undefined,
           template: (() => {
             const t = asString(payload.template, "auto");
             return t === "analyze" || t === "build" || t === "review" || t === "auto" ? t : "auto";
@@ -941,12 +946,17 @@ const plugin = {
       const requiredSkills = Array.isArray(payload.requiredSkills)
         ? payload.requiredSkills.filter((s): s is string => typeof s === "string")
         : undefined;
+      const targetNodes = Array.isArray(payload.targetNodes)
+        ? payload.targetNodes.filter((s): s is string => typeof s === "string")
+        : Array.isArray(payload.selectedNodes)
+          ? payload.selectedNodes.filter((s): s is string => typeof s === "string")
+          : undefined;
       const templateRaw = asString(payload.template, "auto");
       const template = templateRaw === "analyze" || templateRaw === "build" || templateRaw === "review" || templateRaw === "auto"
         ? templateRaw
         : "auto";
 
-      meshManager.submitTask({ goal, requiredSkills, template })
+      meshManager.submitTask({ goal, requiredSkills, template, targetNodes })
         .then((result) => respond(true, result))
         .catch((error) => respond(false, { error: String((error as Error)?.message || error) }));
     });

@@ -144,11 +144,12 @@ export class MeshNetworkManager implements MeshControlPlane {
       throw new Error("goal is required");
     }
     const requiredSkills = normalizeStringArray(input.requiredSkills);
+    const targetNodes = normalizeStringArray(input.targetNodes);
     const template = input.template && input.template !== "auto"
       ? input.template
       : inferMeshTemplate(goal);
 
-    return this.submitTaskInternal(goal, requiredSkills, template);
+    return this.submitTaskInternal(goal, requiredSkills, template, targetNodes);
   }
 
   async handleInboundControlMessage(message: unknown): Promise<MeshControlHandleResult> {
@@ -209,13 +210,19 @@ export class MeshNetworkManager implements MeshControlPlane {
     }
   }
 
-  private async submitTaskInternal(goal: string, requiredSkills: string[], template: MeshTemplate): Promise<MeshTaskSubmitResult> {
+  private async submitTaskInternal(
+    goal: string,
+    requiredSkills: string[],
+    template: MeshTemplate,
+    targetNodes: string[] = [],
+  ): Promise<MeshTaskSubmitResult> {
     const meshTaskId = randomUUID();
     const now = new Date().toISOString();
 
     const candidates = this.getEligibleNodes();
+    const scopedCandidates = this.applyTargetNodes(candidates, targetNodes);
     const selectedCandidates = selectMeshNodes(
-      candidates,
+      scopedCandidates,
       requiredSkills,
       Math.max(2, this.config.scheduler.maxFanout + 1),
     );
@@ -466,10 +473,11 @@ export class MeshNetworkManager implements MeshControlPlane {
       return this.createFrame("TASK_FAIL", { reason: "missing goal" }, envelope.meshTaskId, envelope.fromNodeId);
     }
     const requiredSkills = normalizeStringArray(envelope.payload.requiredSkills as unknown[]);
+    const targetNodes = normalizeStringArray(envelope.payload.targetNodes as unknown[]);
     const rawTemplate = asString(envelope.payload.template) as MeshTemplate | "auto" | "";
     const template = rawTemplate && rawTemplate !== "auto" ? rawTemplate : inferMeshTemplate(goal);
 
-    const result = await this.submitTaskInternal(goal, requiredSkills, template);
+    const result = await this.submitTaskInternal(goal, requiredSkills, template, targetNodes);
     const task = this.tasks.get(result.meshTaskId);
     if (!task || task.state !== "DONE") {
       return this.createFrame(
@@ -524,6 +532,7 @@ export class MeshNetworkManager implements MeshControlPlane {
       goal: task.goal,
       requiredSkills: task.requiredSkills,
       template: task.template,
+      targetNodes: task.selectedNodes,
     }, task.meshTaskId, fallbackNodeId);
     return this.sendControlFrameToPeer(peer, frame);
   }
@@ -786,6 +795,25 @@ export class MeshNetworkManager implements MeshControlPlane {
     };
 
     return [localNode, ...this.neighbors.listOnline()];
+  }
+
+  private applyTargetNodes(candidates: MeshNeighborNode[], targetNodes: string[]): MeshNeighborNode[] {
+    if (!targetNodes.length) {
+      return candidates;
+    }
+
+    const wanted = new Set(targetNodes);
+    const available = new Set(candidates.map((node) => node.nodeId));
+    const missing = [...wanted].filter((nodeId) => !available.has(nodeId));
+    if (missing.length > 0) {
+      throw new Error(`target nodes unavailable or offline: ${missing.join(", ")}`);
+    }
+
+    const filtered = candidates.filter((node) => wanted.has(node.nodeId));
+    if (!filtered.length) {
+      throw new Error("no target nodes matched current mesh candidates");
+    }
+    return filtered;
   }
 
   private ensureLocalIncluded(nodes: MeshNeighborNode[]): MeshNeighborNode[] {
