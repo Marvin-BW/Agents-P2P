@@ -91,6 +91,28 @@
           "required": ["name", "agentCardUrl"]
         }
       },
+      "peerRegistry": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Optional external peer registry file (hot-reloaded and auto-updated by coordinator).",
+        "properties": {
+          "filePath": {
+            "type": "string",
+            "description": "Absolute or workspace-relative JSON file path (for example ./data/mesh-peers.json)."
+          },
+          "pollIntervalMs": {
+            "type": "number",
+            "default": 5000,
+            "minimum": 1000,
+            "description": "Polling interval in milliseconds for reloading peer registry file."
+          }
+        },
+        "required": ["filePath"]
+      },
+      "peerRegistryFile": {
+        "type": "string",
+        "description": "Backward-compatible alias for peerRegistry.filePath."
+      },
       "security": {
         "type": "object",
         "additionalProperties": false,
